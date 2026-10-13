@@ -122,6 +122,31 @@ function expectPass(checker, file, note, { hint } = {}) {
     P("2025 年营业收入为 120 亿元，2026 年营业收入为 135 亿元。"),
   ]), "不同年份不误报");
 
+  // 中文版 Word 的标题样式 ID 是 "1"／"2"；手打「一、」当标题。都要认成标题，
+  // 不然计数句会把后文整段当正文扫，误拦
+  const S = (t, style) => new docx.Paragraph({ style, children: [new docx.TextRun(t)] });
+  expectPass("check-num.js", await build("中文样式标题.docx", [
+    S("工作安排", "1"), P("做好以下两方面工作。"), S("统筹部署", "2"), S("压实责任", "2"),
+    S("有关要求", "1"), P("一是加强领导，二是压实责任，三是加强督导。"),
+  ]), "中文样式 ID 的标题");
+  expectPass("check-num.js", await build("手打标题.docx", [
+    P("一、工作安排"), P("做好以下两方面工作。"), P("（一）统筹部署"), P("（二）压实责任"),
+    P("二、有关要求"), P("一是加强领导，二是压实责任，三是加强督导。"),
+  ]), "手打层次序数的标题");
+  // 「统一是」「唯一是」不是列举
+  expectPass("check-num.js", await build("统一是.docx", [
+    G.h1("有关要求"), P("提出以下三点要求。标准统一是基础，二是压实责任。"),
+    G.h2("统一标准"), G.h2("压实责任"), G.h2("加强督导"),
+  ]), "「统一是」不算列举");
+  // 千分位数字也要参与正文对照
+  expectPass("check-num.js", await build("千分位.docx", [
+    P("全年营业收入为 1,200 万元。"), P("全年营业收入为 1,250 万元。"),
+  ]), "千分位数字", { hint: "正文同指标异值" });
+  // 不同主语的同名指标不是同一项
+  expectPass("check-num.js", await build("不同主语.docx", [
+    P("A 公司营业收入为 30 亿元，B 公司营业收入为 40 亿元。"),
+  ]), "不同主语不误报");
+
   console.log(failed ? `\n负对照失败 ${failed} 项` : "\n负对照全部报出");
   process.exit(failed ? 1 : 0);
 })().catch((e) => {
