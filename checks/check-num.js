@@ -73,6 +73,13 @@ async function loadParts(file) {
 // 体检现成文件时一律跳过等于没查。版式表格（联合行文标志等）只有一行，或者
 // 没有「合计」行和干净数字，判据本身不会命中。
 // rows.idx 是它在全文表格里的序号（修复工具挂批注用）。
+// 比率类标签：以「率」「单价」等结尾（去掉末尾括注的单位），或以「平均」开头。
+// 只认词尾：「功率模块」「效率提升工程」是普通明细，不是比率。
+function isRateLabel(s) {
+  const t = (s || "").replace(/[（(][^（()）]*[）)]\s*$/, "").trim();
+  return /(?:率|增速|增幅|单价|均价|倍数)$/.test(t) || /^平均/.test(t);
+}
+
 function readTables(xml) {
   return (xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || [])
     .map((tb, idx) => {
@@ -124,9 +131,9 @@ async function check(file) {
     // 比率列（毛利率、增长率、单价……）的合计行是加权平均，不是加总，不查；
     // 占比、比例、比重这类构成列照查。
     const isTotalRow = (cells) => cells.some((c) => TOTAL_LABEL.test(c || ""));
-    const isRateCol = (h) => /率|单价|均价|平均|增速|增幅|倍/.test(h || "") && !/占比|比例|比重|构成/.test(h || "");
+    const isRateCol = (h) => isRateLabel(h) && !/占比|比例|比重|构成/.test(h || "");
     // 比率行（「预期增长率」「单价」）夹在明细里，不进求和
-    const isRateRow = (cells) => cells.some((c) => c && !num(c) && /率|增速|增幅|单价|均价|平均/.test(c));
+    const isRateRow = (cells) => cells.some((c) => c && !num(c) && isRateLabel(c));
     rows.forEach((cells, ri) => {
       if (ri < first) return;
       const labelIdx = cells.findIndex((c) => TOTAL_LABEL.test(c || ""));
@@ -160,7 +167,8 @@ async function check(file) {
           if (n.pct && !total.pct) continue;
           vals.push(n.v);
         }
-        if (!clean || vals.length < 2) continue;
+        // 手写表只有一项的段不查：「合计」常是另一个口径（跨页续表、只列一项的明细）
+        if (!clean || vals.length < (rows.declared ? 1 : 2)) continue;
         const sum = vals.reduce((x, y) => x + y, 0);
         if (!close(sum, total.v)) {
           report("合计不符", `第 ${ti + 1} 表「${cells[labelIdx]}」行第 ${ci + 1} 列：上面 ${vals.length} 项之和 ${round(sum)} ≠ 表内${cells[labelIdx]} ${total.raw}`, [{ text: total.raw, table: rows.idx }]);
@@ -177,7 +185,7 @@ async function check(file) {
       if (head.some((x, k) => k > 0 && k !== ci && isRateCol(x))) return;   // 混着比率列，行内加总无意义
       for (let r = 1; r < rows.length; r++) {
         // 合计行已在第 1 段查过，别从列的方向再报一遍；余额、单价、比率这类行按行加总没有意义
-        if (TOTAL_LABEL.test(rows[r][0] || "") || /余额|期初|期末|累计|单价|均价|率/.test(rows[r][0] || "")) continue;
+        if (TOTAL_LABEL.test(rows[r][0] || "") || /余额|期初|期末|累计/.test(rows[r][0] || "") || isRateLabel(rows[r][0])) continue;
         const total = num(rows[r][ci]);
         if (!total) continue;
         const vals = [];

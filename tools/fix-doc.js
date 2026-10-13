@@ -21,7 +21,7 @@ const path = require("path");
 const JSZip = require("jszip");
 const { parseParagraph, applyEdits, unitalic } = require("../lib/fix/runs");
 const { editsFor } = require("../lib/fix/text-rules");
-const { fixStyles, fixDocument, fixPackage } = require("../lib/fix/layout");
+const { fixStyles, fixDocument, fixPackage, redStyleIds } = require("../lib/fix/layout");
 const { addComments, registerComments } = require("../lib/fix/comments");
 const checkDoc = require("../checks/check-doc");
 const checkNum = require("../checks/check-num");
@@ -43,7 +43,11 @@ function args() {
     console.error("用法：node tools/fix-doc.js 稿子.docx [--out 输出.docx] [--no-layout]");
     process.exit(2);
   }
-  o.out = o.out || path.join(path.dirname(o.file), path.basename(o.file, ".docx") + "-修订.docx");
+  o.out = o.out || path.join(path.dirname(o.file), path.basename(o.file).replace(/\.docx$/i, "") + "-修订.docx");
+  if (path.resolve(o.out) === path.resolve(o.file)) {
+    console.error("输出路径和原文件相同，会覆盖原稿。换一个 --out。");
+    process.exit(2);
+  }
   return o;
 }
 
@@ -132,9 +136,10 @@ function toComments(items) {
   const notes = [];
   let headingIds = {};
   if (o.layout) {
+    const redStyles = redStyleIds(styles);
     const s = fixStyles(styles, notes);
     styles = s.xml; headingIds = s.headingIds;
-    docXml = fixDocument(docXml, { headingIds, titleFont: TITLE_FONT }, notes);
+    docXml = fixDocument(docXml, { headingIds, titleFont: TITLE_FONT, redStyles }, notes);
     const pk = fixPackage(zip, { rels, types, settings }, notes);
     ({ rels, types, settings } = pk);
   } else {
@@ -142,8 +147,9 @@ function toComments(items) {
   }
 
   // 修订与批注共用 id 空间，从文中已有的最大 id 之后开始
-  const ids = [...(docXml + existingComments).matchAll(/w:id="(\d+)"/g)].map((m) => +m[1]);
-  let next = (ids.length ? Math.max(...ids) : 0) + 1;
+  // 不用 Math.max(...ids)：id 上十万个的大文件会超出参数上限
+  let next = 1;
+  for (const m of (docXml + existingComments).matchAll(/w:id="(\d+)"/g)) if (+m[1] >= next) next = +m[1] + 1;
   const date = new Date().toISOString().replace(/\.\d+Z$/, "Z");
   const rev = { nextId: () => next++, author: AUTHOR, date };
   const tally = {};

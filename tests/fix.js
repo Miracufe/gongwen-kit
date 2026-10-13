@@ -96,6 +96,21 @@ const fix = (file, out) => execFileSync("node", [path.join(ROOT, "tools/fix-doc.
     "筹划项目，于2026年5月8日前报送", "（详见附件）。", "100 kWh", "2026年10月13日"]) {
     ok(has(s), `接受后：${s}`);
   }
+  // 结构：红头（样式红）、文本框、页眉、页面设置修订
+  const paraOf = (xml, s) => (xml.match(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g) || []).find((p) => decode(textOf(p)).includes(s)) || "";
+  ok(/关于做好2026年度项目申报工作的通知/.test(report) && !/人民政府办公室」改为|内部资料」改为/.test(report), "标题认对了：样式红的红头和居中文本框都不是标题");
+  ok(/w:sz w:val="24"/.test(paraOf(out, "人民政府办公室")) && /w:sz w:val="24"/.test(paraOf(out, "内部资料")), "红头（样式红）与文本框里的字体字号不动");
+  for (const s of ["各县", "人民政府办公室", "×发改", "内部资料", "地区", "××市发展和改革委员会", "13日"]) {
+    ok(/w:firstLine="0"/.test(paraOf(out, s)), `原来不缩进的段落补了首行不缩进：${s}`);
+  }
+  ok(!/w:firstLine="0"/.test(paraOf(out, "为做好项目申报")), "正文段落照样跟着 Normal 缩进二字");
+  ok(/<w:headerReference w:type="even" r:id="rIdHdr"\/>/.test(out), "只有默认页眉的节，双页沿用同一个页眉");
+  {
+    const sect = out.slice(out.lastIndexOf("<w:body>")).match(/<w:sectPr>[\s\S]*<\/w:sectPr>/)[0];
+    const change = sect.match(/<w:sectPrChange[\s\S]*<\/w:sectPrChange>/)[0];
+    ok(/w:top="2098"/.test(sect.replace(change, "")) && /w:top="1440"/.test(change) && sect.endsWith("</w:sectPrChange></w:sectPr>"),
+      "页面设置修订里的旧 sectPr 原样保留，新版心写在外层");
+  }
   ok(/<w:hyperlink r:id="rIdLink">[\s\S]*申报系统[\s\S]*?<\/w:hyperlink>/.test(out), "超链接原样保留");
   ok(has("1200") && has("800") && has("2100"), "表格里的数不改（合计错也不改）");
   ok((out.match(/w:author="审核人"/g) || []).length === 3, "原稿里别人的修订原样保留");
@@ -123,10 +138,15 @@ const fix = (file, out) => execFileSync("node", [path.join(ROOT, "tools/fix-doc.
   ok(/<w:rPrDefault><w:rPr><w:rFonts w:ascii="FangSong"/.test(styles), "默认字体仿宋");
   ok(/w:styleId="1">[\s\S]*?SimHei[\s\S]*?<\/w:style>/.test(styles), "中文样式 ID 的一级标题改成黑体");
   ok(/w:firstLineChars="200"/.test(styles), "正文首行缩进二字");
-  ok(!(out.match(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g) || []).some((p) => /w:line="360"/.test(p) && !/FF0000/.test(p)),
+  ok(!(out.match(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g) || []).some((p) => /w:line="360"/.test(p) && !/FF0000|RedHead/.test(p)),
     "手设的 1.5 倍行距交还网格（红头不动）");
   ok(z.file("word/footerGwOdd.xml") && /PAGE/.test(await z.file("word/footerGwOdd.xml").async("string")), "加了公文页码");
   ok(/原文件未改动/.test(report), "报告写明原文件未改动");
+  {
+    let refused = false;
+    try { fix(messy, messy); } catch (e) { refused = e.status === 2; }
+    ok(refused && (await docXml(messy)) === orig, "--out 指向原文件时拒绝执行，原稿不被覆盖");
+  }
   ok(fs.readFileSync(messy).equals(fs.readFileSync(messy)) && (await docXml(messy)) === orig, "原文件没被改");
 
   console.log("\n== 合规件不误改 ==");
