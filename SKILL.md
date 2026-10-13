@@ -34,6 +34,9 @@ description: 中文公文（党政机关、央国企场景）Word 生成与合�
 - 主送机关顶格、末尾全角冒号；正文每段左空二字
 - 上行文（请示、上报的报告）：给 `letterhead` 传 `signers`，发文字号自动到左侧、
   与最后一个签发人同排
+- 信函格式（函，GB/T 9704 10.1）：节属性用 `xinhanSection({ agency })` 代替
+  `sectionProps()`，正文开头用 `xinhanHead({ docNo, copyNo, secret, urgency })` 代替
+  `letterhead`；版记用 `banji({ letter: true, copyTo })`（只留抄送）。照 `templates/xinhan.js`
 - 红头分「数字红头」（直接绘制）与「预印套打」（`preprinted: true` 只留空位）
 - 需要抄送与印发信息时接 `banji({ copyTo, issuer, date })`；附件说明用
   `fujian([...])`（多个自动编号），成文日期之后的括注用 `fuzhu("（……）")`

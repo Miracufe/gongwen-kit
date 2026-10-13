@@ -4,11 +4,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "== 正案例：四份样张 =="
+echo "== 正案例：五份样张 =="
 node templates/complete.js | tail -4
 node templates/gongwen-qingshi.js | tail -4
 node templates/gongwen-guanli.js | tail -4
 node templates/notice.js | tail -4
+node templates/xinhan.js | tail -4
 echo
 echo "== 负对照 =="
 node tests/negative.js
