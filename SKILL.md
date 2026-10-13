@@ -39,6 +39,9 @@ description: 中文公文（党政机关、央国企场景）Word 生成与合�
 - 信函格式（函，GB/T 9704 10.1）：节属性用 `xinhanSection({ agency })` 代替
   `sectionProps()`，正文开头用 `xinhanHead({ docNo, copyNo, secret, urgency })` 代替
   `letterhead`；版记用 `banji({ letter: true, copyTo })`（只留抄送）。照 `templates/xinhan.js`
+- 纪要格式（GB/T 9704 10.3）：版头用 `jiyaoHead({ mark: "×××纪要", issue: "〔2026〕第 1 期" })`
+  代替 `letterhead`；正文后接 `attendees([["出席", "…"], ["请假", "…"], ["列席", "…"]])`。
+  照 `templates/jiyao.js`
 - 红头分「数字红头」（直接绘制）与「预印套打」（`preprinted: true` 只留空位）
 - 需要抄送与印发信息时接 `banji({ copyTo, issuer, date })`；附件说明用
   `fujian([...])`（多个自动编号），成文日期之后的括注用 `fuzhu("（……）")`

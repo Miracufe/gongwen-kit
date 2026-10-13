@@ -22,6 +22,7 @@ Word 会静默回退，而 docx 机检看不出来。只有 PDF 的内嵌字体�
   ~/.venvs/pdf/bin/python3 tools/check-pdf.py <pdf> [--allow "字体1,字体2"]
 退出码 0 通过，1 不通过，2 用法错。
 """
+import re
 import sys
 
 try:
@@ -33,10 +34,11 @@ except ImportError:
 ALLOW = [
     "FangSong", "SimHei", "KaiTi", "SimSun",
     "方正小标宋简体", "FZXiaoBiaoSong-B05S", "FZXiaoBiaoSong-B13S",
+    "FZXBS",   # PostScript 名：简体 FZXBSJW--GB1-0、GBK 版 FZXBSK--GBK1-0
     "STSongti-SC-Black",
 ]
 # 标题形状：小标宋／黑体／楷体，三号（16pt）以上
-HEAD = ("方正小标宋简体", "FZXiaoBiaoSong", "SimHei", "KaiTi", "STSongti-SC-Black")
+HEAD = ("方正小标宋简体", "FZXiaoBiaoSong", "FZXBS", "SimHei", "KaiTi", "STSongti-SC-Black")
 HEAD_MIN = 15
 
 # 版心上界与页面内正文底界（pt）。A4 高 842；页脚页码另算。
@@ -79,7 +81,28 @@ def check_fonts(doc):
     msgs = [f"字体不在白名单　{f} ×{len(h)}，例：{h[0][1]!r}（p{h[0][0]}）" for f, h in bad.items()]
     if msgs:
         msgs.append("　白名单：" + "、".join(ALLOW))
-    return msgs
+    return msgs + check_title_font(doc)
+
+
+# 标题与发文机关标志（二号 22pt 以上，降号下限也是 22pt）只许小标宋或其预览替代。
+# SimSun 在白名单里是给页码用的：没装方正小标宋时 Word 会把标题静默回退成 SimSun，
+# 只查白名单会放过它（实际发生过：标题与红头全是宋体，字体机检照样通过）。
+TITLE_FONTS = ("方正小标宋简体", "FZXiaoBiaoSong", "FZXBS", "STSongti-SC-Black")
+TITLE_MIN = 21.5
+
+
+def check_title_font(doc):
+    bad = {}
+    for pno, page in enumerate(doc, 1):
+        for block in page.get_text("dict")["blocks"]:
+            for line in block.get("lines", []):
+                for span in line["spans"]:
+                    # 只看含汉字的片段：×、数字这类西文字符走样式里的西文字体，不是回退
+                    if re.search(r"[\u4e00-\u9fff]", span["text"]) and span["size"] >= TITLE_MIN \
+                            and not any(t in span["font"] for t in TITLE_FONTS):
+                        bad.setdefault(span["font"], []).append((pno, span["text"][:16]))
+    return [f"标题字体回退　{f} ×{len(h)}，例：{h[0][1]!r}（p{h[0][0]}）；标题与发文机关标志应为方正小标宋，"
+            f"本机可能没装（见 docs/字体.md）" for f, h in bad.items()]
 
 
 def opens_chapter(lines):

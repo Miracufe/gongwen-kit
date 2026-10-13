@@ -13,14 +13,14 @@
 
 面向党政机关、央国企和一般单位的日常公文：通知、报告、请示、函、纪要、管理办法、条例。
 
-![三份样张的首页：通知、请示、函](assets/samples.png)
+![四份样张的首页：通知、请示、信函、纪要](assets/samples.png)
 
 ## 30 秒上手
 
 ```bash
 git clone https://github.com/imhuhe/gongwen-kit.git && cd gongwen-kit
 npm install
-npm test          # 生成五份样张，每份跑完三道机检；再跑 11 例必错标本与 4 例必过标本
+npm test          # 生成六份样张，每份跑完三道机检；再跑 11 例必错标本与 9 例必过标本
 ```
 
 样张在 `samples/word/`，用 Word 打开即可。
@@ -46,6 +46,8 @@ npm test          # 生成五份样张，每份跑完三道机检；再跑 11 �
   红色分隔线；数字红头与预印套打两种形态；份号、密级、紧急程度可选
 - **信函格式**（GB/T 9704 10.1）：标志距上页边 30 mm、两条 170 mm 红色双线、
   发文字号居右、首页不印页码、版记只留抄送
+- **纪要格式**（GB/T 9704 10.3）：「×××纪要」标志、期号；出席、请假、列席名单
+  标签黑体、名单仿宋，回行与冒号后首字对齐
 - **版记**：抄送机关、印发机关和印发日期、三条分隔线，浮动锚定在版心底部
 - **附件页**：另面编排、单附件不编号、不装订附件的发文字号
 
@@ -77,7 +79,7 @@ node tools/new-doc.js --form wen --out 我的稿子.js   # 行文体；条文体
 node 我的稿子.js                                     # 出稿，写盘后自动机检
 ```
 
-所有构件的用法看 `templates/complete.js`，真实场景看 `templates/notice.js` 与 `templates/xinhan.js`。
+所有构件的用法看 `templates/complete.js`，真实场景看 `templates/notice.js`、`templates/xinhan.js` 与 `templates/jiyao.js`。
 
 体检别人的文件（手写的稿子也可以）：
 
