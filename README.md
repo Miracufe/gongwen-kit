@@ -20,10 +20,37 @@
 ```bash
 git clone https://github.com/imhuhe/gongwen-kit.git && cd gongwen-kit
 npm install
-npm test          # 生成六份样张，每份跑完三道机检；再跑全部必错标本与必过标本
+npm test          # 生成七份样张，每份跑完三道机检；再跑全部必错标本与必过标本
 ```
 
 样张在 `samples/word/`，用 Word 打开即可。
+
+## 样张
+
+七份样张由 Word 导出的 PDF 在 [docs/样张/](docs/样张/)，GitHub 上可以直接翻页看。
+
+**要素全览**：一份把全部构件摆出来——联合行文红头、份号密级紧急程度、四层层次序数、三线表、
+附件说明、联合落款、附件页、版记。点图看 PDF。
+
+[![要素全览五页](assets/full.png)](docs/样张/公文要素全览.pdf)
+
+**非红头企业文书**：央国企日常最常用的形态，没有版头，从标题直接起，版心与其余要素照样按国标。
+表格合计和正文「三个方面」都过了数字机检。
+
+[![企业内部报告两页](assets/qiye.png)](docs/样张/企业内部报告.pdf)
+
+| 样张 | 形态 | 页数 |
+|---|---|---|
+| [公文要素全览](docs/样张/公文要素全览.pdf) | 联合行文、全部构件 | 5 |
+| [公文通知](docs/样张/公文通知.pdf) | 下行文，完整版头与版记 | 2 |
+| [公文请示](docs/样张/公文请示.pdf) | 上行文，签发人、附件页 | 4 |
+| [公文信函](docs/样张/公文信函.pdf) | 信函格式（10.1） | 2 |
+| [公文纪要](docs/样张/公文纪要.pdf) | 纪要格式（10.3） | 2 |
+| [公文管理办法](docs/样张/公文管理办法.pdf) | 条文体，章条连号 | 3 |
+| [企业内部报告](docs/样张/企业内部报告.pdf) | 非红头 | 2 |
+
+出图的机器没装方正小标宋，样张 PDF 的标题和机关标志用 Songti SC Black 代替；装了字体后
+重新生成，就是国标用字。
 
 ## 它查什么
 
@@ -40,6 +67,13 @@ npm test          # 生成六份样张，每份跑完三道机检；再跑全部
 作为合规凭据留档。
 
 现成的 .docx 也能直接修，见下文「修复现成文件」。
+
+## 和别家比
+
+按国标排版、查错别字，大厂和开源都在做，有的版式比本仓全。本仓多做的是数字自洽这一类跨段落检查。
+各家能力取自官网与公开资料（2026-10-13 核对，厂商口径），来源列在图底。
+
+![公文工具横向对比](assets/compare.png)
 
 ## 能力
 
@@ -81,7 +115,8 @@ node tools/new-doc.js --form wen --out 我的稿子.js   # 行文体；条文体
 node 我的稿子.js                                     # 出稿，写盘后自动机检
 ```
 
-所有构件的用法看 `templates/complete.js`，真实场景看 `templates/notice.js`、`templates/xinhan.js` 与 `templates/jiyao.js`。
+所有构件的用法看 `templates/complete.js`，真实场景看 `templates/notice.js`、`templates/xinhan.js` 与 `templates/jiyao.js`；
+不要红头的企业文书看 `templates/qiye.js`。
 
 ## 修复现成文件
 

@@ -47,6 +47,8 @@ description: 中文公文（党政机关、央国企场景）Word 生成、修�
 - 纪要格式（GB/T 9704 10.3）：版头用 `jiyaoHead({ mark: "×××纪要", issue: "〔2026〕第 1 期" })`
   代替 `letterhead`；正文后接 `attendees([["出席", "…"], ["请假", "…"], ["列席", "…"]])`。
   照 `templates/jiyao.js`
+- 不要红头的（企业内部报告、请示、工作方案，央国企日常多是这种）：不接 `letterhead`，
+  从 `title` 起，标题可带单位名；版心与其余要素不变。照 `templates/qiye.js`
 - 红头分「数字红头」（直接绘制）与「预印套打」（`preprinted: true` 只留空位）
 - 需要抄送与印发信息时接 `banji({ copyTo, issuer, date })`；附件说明用
   `fujian([...])`（多个自动编号），成文日期之后的括注用 `fuzhu("（……）")`

@@ -10,3 +10,8 @@ samples.png：notice、qingshi、xinhan、jiyao 四份样张经 Word 导出 PDF 
 
     chrome --headless --no-proxy-server --hide-scrollbars --force-device-scale-factor=2 \
       --window-size=1280,640 --screenshot="$HOME/Desktop/gongwen-kit-social-preview.png" "file://$(pwd)/social.html"
+
+full.png、qiye.png：docs/样张/ 里对应 PDF 的逐页拼图（100 dpi）。docs/样张/ 的 PDF 由 Word 导出，
+同样设 `GONGWEN_FONT_TITLE="Songti SC Black"`。
+
+compare.png：compare.html 的截图，窗口 1600×1560，2 倍。改动对比内容先重核来源，改核对日期。

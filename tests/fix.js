@@ -150,7 +150,7 @@ const fix = (file, out) => execFileSync("node", [path.join(ROOT, "tools/fix-doc.
   ok(fs.readFileSync(messy).equals(fs.readFileSync(messy)) && (await docXml(messy)) === orig, "原文件没被改");
 
   console.log("\n== 合规件不误改 ==");
-  for (const t of ["notice", "gongwen-qingshi", "complete", "xinhan", "jiyao"]) {
+  for (const t of ["notice", "gongwen-qingshi", "complete", "xinhan", "jiyao", "qiye"]) {
     const src = path.join(TMP, `${t}.docx`);
     execFileSync("node", [path.join(ROOT, "templates", `${t}.js`), src], { encoding: "utf8", stdio: "pipe" });
     const dst = path.join(TMP, `${t}-修订.docx`);
