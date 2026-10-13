@@ -21,6 +21,7 @@ let failed = 0;
 async function build(name, children, props) {
   const doc = new docx.Document({
     externalStyles: G.externalStyles(),
+    numbering: G.numbering,
     sections: [{
       properties: props || {
         page: { size: { width: 11906, height: 16838 }, margin: G.MARGIN },
@@ -46,6 +47,19 @@ function expectFail(checker, file, note) {
   }
   const first = out.split("\n").find((l) => l.includes("·")) || out.split("\n")[0];
   console.log(`  ✓ ${checker} 报出「${note}」：${String(first).trim().slice(0, 64)}`);
+}
+
+// 必过标本：规则在正确的稿子上不许误报（拦截档与提示档都查）
+function expectPass(checker, file, note, { hint } = {}) {
+  const r = spawnSync(process.execPath, [path.join(ROOT, "checks", checker), file, "--strict"], { encoding: "utf8" });
+  const out = (r.stdout || "") + (r.stderr || "");
+  const hinted = out.includes("提示");
+  if (r.status !== 0 || (hint ? !out.includes(hint) : hinted)) {
+    failed += 1;
+    console.log(`  ✗ ${checker}「${note}」${hint ? "没有给出提示「" + hint + "」或拦了稿" : "误报"}\n${out.trim()}`);
+    return;
+  }
+  console.log(`  ✓ ${checker}「${note}」${hint ? "提示且不拦稿" : "不误报"}`);
 }
 
 (async () => {
@@ -80,6 +94,33 @@ function expectFail(checker, file, note) {
   // 表格合计不符
   const t = G.table({ head: ["项目", "金额"], widths: [3000, 3000], rows: [["甲", "10"], ["乙", "20"], ["合计", "99"]] });
   expectFail("check-num.js", await build("合计错.docx", [...t]), "合计不符");
+
+  // 计数与列举：下一级标题条数对不上
+  expectFail("check-num.js", await build("计数标题.docx", [
+    G.h1("工作安排"), P("重点做好以下三项工作。"), G.h2("统筹部署"), G.h2("压实责任"),
+  ]), "计数与列举（标题）");
+  // 计数与列举：行内「一是、二是」条数对不上
+  expectFail("check-num.js", await build("计数行内.docx", [
+    G.h1("有关要求"), P("提出以下三点要求：一是加强领导，二是压实责任。"),
+  ]), "计数与列举（行内）");
+  // 计数对得上的不许误报；全文开头的计数句不判
+  expectPass("check-num.js", await build("计数正确.docx", [
+    P("现就以下四项工作通知如下。"),
+    G.h1("工作安排"), P("重点做好以下两项工作。"), G.h2("统筹部署"), G.h2("压实责任"),
+    G.h1("有关要求"), P("提出以下三点要求：一是加强领导，二是压实责任，三是加强督导。"),
+  ]), "计数正确");
+  // 正文同指标异值、正文与表格异值：只提示，不拦稿
+  expectPass("check-num.js", await build("正文异值.docx", [
+    P("2025 年全年营业收入为 120 亿元。"), P("2025 年全年营业收入为 125 亿元。"),
+  ]), "正文同指标异值", { hint: "正文同指标异值" });
+  const t2 = G.table({ head: ["指标", "金额（亿元）"], widths: [3000, 3000], rows: [["营业收入", "120"], ["利润总额", "8"]] });
+  expectPass("check-num.js", await build("正文表格异值.docx", [
+    P("全年营业收入为 125 亿元。"), ...t2,
+  ]), "正文与表格异值", { hint: "正文与表格异值" });
+  // 不同年份的同名指标不是同一项
+  expectPass("check-num.js", await build("不同年份.docx", [
+    P("2025 年营业收入为 120 亿元，2026 年营业收入为 135 亿元。"),
+  ]), "不同年份不误报");
 
   console.log(failed ? `\n负对照失败 ${failed} 项` : "\n负对照全部报出");
   process.exit(failed ? 1 : 0);

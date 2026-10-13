@@ -9,10 +9,18 @@
  * 对不对。表内合计、百分比构成、同一指标在两张表里的取值——全靠手算，改一个
  * 参数要人工复算全部关联表。这条把它机检化。
  *
- * **只收无歧义的三类，宁漏勿滥**（检查项自己制造假阳性比没有检查更糟）：
+ * **拦截只收无歧义的四类，宁漏勿滥**（检查项自己制造假阳性比没有检查更糟）：
  *   1. 合计行／合计列：标了「合计／总计／小计」的行列，等于其余数值格之和
  *   2. 百分比构成：标了百分号的合计，且该行／列是占比，和应为 100
  *   3. 同指标跨表同值：同一文字标签在两张数据表里出现不同数值
+ *   4. 计数与列举：正文「以下三点／如下四个方面」与其后实际列出的条数
+ *      （下一级标题，或「一是、二是」行内列举）对不上
+ *
+ * **提示不拦稿**（要靠标签匹配，有误报可能，交给人判断）：
+ *   5. 正文同指标异值：「××为／达 N 单位」在正文多处出现、数值不同
+ *      （标签＋单位＋同句年份作键，2025 年与 2026 年的收入不会被当成同一项）
+ *   6. 正文与表格异值：正文「××为 N 单位」与表格同名行的值不同；
+ *      只比单值列、且表头写明了同一单位的表
  *
  * 一格不是干净数字（空格、中文单位、括号负数、破折号）就不参与这一列，不当 0，
  * 也不报错——那是 check-doc 与人工的活。数值容差见 TOL。
@@ -147,7 +155,118 @@ async function check(file) {
     });
   });
 
+  // ── 4～6 正文 ──────────────────────────────────────────
+  const { paras, unitTables } = await readBody(file, tables);
+  checkEnumeration(paras, add);
+  const hints = [];
+  checkProseValues(paras, unitTables, (rule, detail) => hints.push({ rule, detail }));
+  hits.hints = hints;
   return hits;
+}
+
+// ── 正文读取 ──────────────────────────────────────────────
+// 正文段落（表格之外）：文本与标题层级（Heading1..4 → 1..4，正文 0）。
+async function readBody(file, tables) {
+  const zip = await JSZip.loadAsync(fs.readFileSync(file));
+  const xml = (await zip.file("word/document.xml").async("string"))
+    .replace(/<w:tbl>[\s\S]*?<\/w:tbl>/g, "");
+  const paras = (xml.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || []).map((p) => {
+    const st = (p.match(/<w:pStyle w:val="([^"]+)"/) || [])[1] || "";
+    const lv = (st.match(/^Heading(\d)$/) || [])[1];
+    return { level: lv ? Number(lv) : 0, text: textOf(p) };
+  }).filter((p) => p.text);
+  // 表格里能和正文对照的：两列（标签｜数值）、表头写了单位的表
+  const unitTables = tables.map((rows) => {
+    const head = rows[0].join("");
+    const unit = (head.match(/[（(]([^）)]+)[）)]/) || [])[1];
+    if (!unit || rows[0].length !== 2) return null;
+    const vals = new Map();
+    rows.slice(1).forEach((c) => { const n = num(c[1]); if (c[0] && n) vals.set(c[0].trim(), n.v); });
+    return { unit: unit.trim(), vals };
+  }).filter(Boolean);
+  return { paras, unitTables };
+}
+
+const CN = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+const cnNum = (t) => (/^\d+$/.test(t) ? Number(t)
+  : t.length === 1 ? CN[t]
+    : t[0] === "十" ? 10 + (CN[t[1]] || 0)
+      : (CN[t[0]] || 0) * 10 + (CN[t[2]] || 0));
+const ENUM_RE = /(?:以下|如下|下列)([一二两三四五六七八九十]{1,3}|\d{1,2})(?:个)?(?:方面|点|条|项|类|件事|项工作|个问题)/;
+
+// 4 计数与列举
+function checkEnumeration(paras, add) {
+  let section = 0;   // 当前所在章节的标题层级（0＝还没进任何章节）
+  paras.forEach((p, i) => {
+    if (p.level) { section = p.level; return; }
+    const m = p.text.match(ENUM_RE);
+    if (!m) return;
+    const want = cnNum(m[1]);
+    const tail = p.text.slice(m.index + m[0].length);
+
+    // a. 行内列举：本段剩余部分及其后紧接的正文段里的「一是、二是…」
+    let inline = tail;
+    for (let k = i + 1; k < paras.length && !paras[k].level; k++) inline += paras[k].text;
+    const marks = [...inline.matchAll(/([一二三四五六七八九十]{1,2})是/g)].map((x) => cnNum(x[1]));
+    if (marks[0] === 1 && marks.length >= 2) {
+      let n = 1;
+      while (marks.includes(n + 1)) n++;
+      if (n !== want) add("计数与列举", `「${m[0]}」其后行内列了 ${n} 条（一是…${n === 1 ? "" : "、" + "一二三四五六七八九十"[n - 1] + "是"}）`);
+      return;
+    }
+    // b. 下一级标题：只在章节之内判（全文开头的计数句，名下有几条判不清）
+    if (!section) return;
+    const next = paras.slice(i + 1).find((q) => q.level);
+    if (!next || next.level !== section + 1) return;
+    let n = 0;
+    for (let k = i + 1; k < paras.length; k++) {
+      if (paras[k].level && paras[k].level <= section) break;
+      if (paras[k].level === section + 1) n++;
+    }
+    if (n !== want) add("计数与列举", `「${m[0]}」其后列了 ${n} 个下一级标题`);
+  });
+}
+
+// 5、6 正文指标取值（提示）
+const VAL_RE = /([\u4e00-\u9fa5A-Za-z]{2,16}?)(?:为|达到|达|共计|合计|共有|共)\s*(-?\d+(?:\.\d+)?)\s*(%|％|万亿元|亿元|万元|元|万人|个|项|家|人|名|亩|平方米|公里|吨|台|套)/g;
+function checkProseValues(paras, unitTables, hint) {
+  const seen = new Map();
+  for (const p of paras) {
+    if (p.level) continue;
+    for (const sent of p.text.split(/[。；！？]/)) {
+      for (const m of sent.matchAll(VAL_RE)) {
+        // 年份取这个数之前最近的一个：「2025 年收入为 120，2026 年收入为 135」是两项
+        const before = sent.slice(0, m.index);
+        const ys = before.match(/\d{4}\s*年/g);
+        const years = ys ? ys[ys.length - 1].replace(/\s/g, "") : "";
+        // 标签取动词前、最后一个标点之后的那一截，去掉年份残留的「年」
+        const raw = m[1].split(/[，、：（）\s]/).pop().replace(/^[年月日]/, "");
+        // 真实稿回放（60 份业务文件）里的三类误报，逐类排除：
+        //   「分别为 90、105」本来就是多个值；「由 500 万元变更为 450 万元」的「为」
+        //   跟在变动动词后面，不是「指标为」；「复合增长率约 12%」没有主语，
+        //   各细分市场各有各的增长率
+        if (/分别$/.test(raw) || /(变更|调整|增加|减少|增至|降至|提高|降低|上升|下降|增长|扩大|缩减)$/.test(raw)) continue;
+        if (/[\d万亿元%％]/.test(raw)) continue;
+        const label = raw.replace(/(约|累计|预计|预计将|将|已)$/, "");
+        if (!label || label.length < 2 || /^(其中|合计|总计|共|约)$/.test(label)) continue;
+        if (/^(年均)?(复合)?(增长率|增速|增幅|占比|比例|比重|规模|市场规模|同比增长|环比增长|毛利率|净利率)$/.test(label)) continue;
+        const unit = m[3].replace("％", "%");
+        const v = Number(m[2]);
+        const key = `${label}｜${unit}｜${years}`;
+        const prev = seen.get(key);
+        if (prev !== undefined && prev !== v) hint("正文同指标异值", `「${label}」${years ? "（" + years + "）" : ""}一处是 ${prev}${unit}，另一处是 ${v}${unit}`);
+        else seen.set(key, v);
+        // 正文标签常带修饰（「全年营业收入」），表格行名是「营业收入」：按后缀对上
+        for (const t of unitTables) {
+          if (t.unit !== unit) continue;
+          for (const [tl, tv] of t.vals) {
+            if (tl.length < 2 || !label.endsWith(tl)) continue;
+            if (!close(v, tv)) hint("正文与表格异值", `「${tl}」正文是 ${v}${unit}，表格里是 ${tv}${unit}`);
+          }
+        }
+      }
+    }
+  }
 }
 
 // ── 入口 ─────────────────────────────────────────────────
@@ -165,11 +284,19 @@ async function check(file) {
     console.error("机检读不进这份文件（工具故障，不是稿子的问题）：", e.message);
     process.exit(2);
   }
+  const hints = hits.hints || [];
+  const showHints = () => {
+    if (!hints.length) return;
+    console.log(`  提示 ${hints.length} 处（不拦稿，请人工核对）：`);
+    hints.forEach((h) => console.log(`    · ${h.rule}：${h.detail}`));
+  };
   if (!hits.length) {
     console.log(`数字自洽通过　${path.basename(file)}`);
+    showHints();
   } else {
     console.log(`数字自检 ${hits.length} 处　${path.basename(file)}`);
     hits.forEach((h) => console.log(`  · ${h.rule}：${h.detail}`));
+    showHints();
     if (strict) process.exit(1);
   }
 })();
