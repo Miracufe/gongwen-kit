@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/banner.png" alt="gongwen-kit：公文生成与出稿机检" width="100%"></p>
+<p align="center"><img src="assets/banner.png" alt="公文生成与机检工具 gongwen-kit" width="100%"></p>
 
 <p align="center">
   <a href="https://github.com/imhuhe/gongwen-kit/actions/workflows/ci.yml"><img src="https://github.com/imhuhe/gongwen-kit/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -54,8 +54,7 @@ npm test          # 生成七份样张，每份跑完三道机检；再跑全部
 
 ## 它查什么
 
-版式能排对的工具不少。gongwen-kit 多做了一步：**每份稿子写盘后自动跑三道机检，
-不过就非零退出**。
+每份稿子写盘后自动跑三道机检，**哪一道不过就非零退出**，不算出稿。
 
 | 机检 | 查什么 | 例子 |
 |---|---|---|
