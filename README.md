@@ -20,7 +20,7 @@
 ```bash
 git clone https://github.com/imhuhe/gongwen-kit.git && cd gongwen-kit
 npm install
-npm test          # 生成六份样张，每份跑完三道机检；再跑 11 例必错标本与 9 例必过标本
+npm test          # 生成六份样张，每份跑完三道机检；再跑全部必错标本与必过标本
 ```
 
 样张在 `samples/word/`，用 Word 打开即可。

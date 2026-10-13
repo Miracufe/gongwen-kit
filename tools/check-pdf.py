@@ -11,7 +11,9 @@ Word 会静默回退，而 docx 机检看不出来。只有 PDF 的内嵌字体�
 
 小标宋的实际字体是「方正小标宋简体」（目标机器装它）；macOS 之类的预览机
 没有方正字体，本工具默认用 Songti SC Black 替代——替代名在下面单独放行。
-真要去追「目标机器装的到底是哪个字体」，把 --allow 收紧成实际装的字体名。
+22pt 以上含汉字的文字（标题、发文机关标志）另查一遍：只许小标宋或其替代，
+回退成宋体、仿宋都报出来。--allow 加的字体同时放行正文与标题，
+单位用的是别的小标宋版本时用它补上字体名。
 
 二、版面。分页是 Word 排出来的，docx 里看不到：
   · 标题孤悬页底：章节标题是本页最后一行
@@ -68,41 +70,36 @@ def is_heading(spans, min_size=HEAD_MIN):
     return any(h in s["font"] for h in HEAD) and s["size"] >= min_size
 
 
+# 标题与发文机关标志（二号 22pt 以上，降号下限也是 22pt）只许小标宋或其预览替代。
+# SimSun 在白名单里是给页码用的：没装方正小标宋时 Word 会把标题静默回退成 SimSun，
+# 只查白名单会放过它（实际发生过：标题与红头全是宋体，字体机检照样通过）。
+# --allow 加进来的字体同时算合格的标题字体（单位用的其他小标宋版本）。
+TITLE_FONTS = ["方正小标宋简体", "FZXiaoBiaoSong", "FZXBS", "STSongti-SC-Black"]
+TITLE_MIN = 21.5
+CJK = re.compile(r"[\u4e00-\u9fff]")
+
+
 def check_fonts(doc):
-    bad = {}
+    bad, title_bad = {}, {}
     for pno, page in enumerate(doc, 1):
         for block in page.get_text("dict")["blocks"]:
             for line in block.get("lines", []):
                 for span in line["spans"]:
                     if not span["text"].strip():
                         continue
-                    if not any(a in span["font"] for a in ALLOW):
-                        bad.setdefault(span["font"], []).append((pno, span["text"][:16]))
+                    font, hit = span["font"], (pno, span["text"][:16])
+                    if not any(a in font for a in ALLOW):
+                        bad.setdefault(font, []).append(hit)
+                    # 只看含汉字的片段：×、数字这类西文字符走样式里的西文字体，不是回退
+                    elif CJK.search(span["text"]) and span["size"] >= TITLE_MIN \
+                            and not any(t in font for t in TITLE_FONTS):
+                        title_bad.setdefault(font, []).append(hit)
     msgs = [f"字体不在白名单　{f} ×{len(h)}，例：{h[0][1]!r}（p{h[0][0]}）" for f, h in bad.items()]
     if msgs:
         msgs.append("　白名单：" + "、".join(ALLOW))
-    return msgs + check_title_font(doc)
-
-
-# 标题与发文机关标志（二号 22pt 以上，降号下限也是 22pt）只许小标宋或其预览替代。
-# SimSun 在白名单里是给页码用的：没装方正小标宋时 Word 会把标题静默回退成 SimSun，
-# 只查白名单会放过它（实际发生过：标题与红头全是宋体，字体机检照样通过）。
-TITLE_FONTS = ("方正小标宋简体", "FZXiaoBiaoSong", "FZXBS", "STSongti-SC-Black")
-TITLE_MIN = 21.5
-
-
-def check_title_font(doc):
-    bad = {}
-    for pno, page in enumerate(doc, 1):
-        for block in page.get_text("dict")["blocks"]:
-            for line in block.get("lines", []):
-                for span in line["spans"]:
-                    # 只看含汉字的片段：×、数字这类西文字符走样式里的西文字体，不是回退
-                    if re.search(r"[\u4e00-\u9fff]", span["text"]) and span["size"] >= TITLE_MIN \
-                            and not any(t in span["font"] for t in TITLE_FONTS):
-                        bad.setdefault(span["font"], []).append((pno, span["text"][:16]))
-    return [f"标题字体回退　{f} ×{len(h)}，例：{h[0][1]!r}（p{h[0][0]}）；标题与发文机关标志应为方正小标宋，"
-            f"本机可能没装（见 docs/字体.md）" for f, h in bad.items()]
+    msgs += [f"标题字体回退　{f} ×{len(h)}，例：{h[0][1]!r}（p{h[0][0]}）；标题与发文机关标志应为方正小标宋，"
+             f"本机可能没装（见 docs/字体.md）" for f, h in title_bad.items()]
+    return msgs
 
 
 def opens_chapter(lines):
@@ -153,7 +150,9 @@ if __name__ == "__main__":
         i = args.index("--allow")
         if i + 1 >= len(args):
             sys.exit("--allow 后面要给逗号分隔的字体名")
-        ALLOW.extend(x.strip() for x in args[i + 1].split(",") if x.strip())
+        extra = [x.strip() for x in args[i + 1].split(",") if x.strip()]
+        ALLOW.extend(extra)
+        TITLE_FONTS.extend(extra)
         del args[i:i + 2]
     if len(args) != 1:
         print("用法：check-pdf.py <pdf> [--allow \"字体1,字体2\"]", file=sys.stderr)
