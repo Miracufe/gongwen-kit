@@ -69,14 +69,19 @@ async function loadParts(file) {
   return { xml, styles: st ? await st.async("string") : "" };
 }
 
+// 不要求首行声明 tblHeader：本工具生成的表都有，别人手写的 Word 表大多没有，
+// 体检现成文件时一律跳过等于没查。版式表格（联合行文标志等）只有一行，或者
+// 没有「合计」行和干净数字，判据本身不会命中。
+// rows.idx 是它在全文表格里的序号（修复工具挂批注用）。
 function readTables(xml) {
   return (xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || [])
-    .filter((tb) => /<w:tblHeader/.test(tb))
-    .map((tb) => {
+    .map((tb, idx) => {
       const trs = tb.match(/<w:tr[ >][\s\S]*?<\/w:tr>/g) || [];
       const rows = trs.map((tr) => rowCells(tr, textOf));
       // 表尾的无边框定高空行不是数据行（展开后是一串 null／空串）
       if (rows.length && rows[rows.length - 1].every((c) => !c)) rows.pop();
+      rows.idx = idx;
+      rows.declared = /<w:tblHeader/.test(tb);
       return rows;
     })
     .filter((rows) => rows.length >= 2);
@@ -99,35 +104,69 @@ async function check(file) {
   const { xml, styles } = await loadParts(file);
   const tables = readTables(xml);
   const hits = [];
-  const add = (rule, detail) => hits.push({ rule, detail });
+  const hints = [];
+  const add = (rule, detail, anchors = []) => hits.push({ rule, detail, anchors });
+  const hint = (rule, detail, anchors = []) => hints.push({ rule, detail, anchors });
 
   tables.forEach((rows, ti) => {
     const head = rows[0];
+    // 手写表（首行没声明表头）只提示不拦：跨页拆开的表、只列前几名的表，
+    // 合计本来就不等于本页各项之和，工具分不出来（真实稿回放见过这两种）
+    const report = rows.declared ? add : hint;
+    // 没声明表头、首行又有数字的，首行也是数据行
+    const first = !rows.declared && rows[0].some((c) => num(c)) ? 0 : 1;
 
     // ── 1 合计行 ──────────────────────────────────────────
+    // 分段求和：小计只加它上面那一段（上一个合计类行之后）的数据行；合计、总计
+    // 前面有小计的，对各小计之和，没有小计的对上面那一段。合计行写在表首的，
+    // 对它下面那一段。真实稿回放（手写的财务表）里一张表常有好几段小计，整列
+    // 一起加必然对不上。
+    // 比率列（毛利率、增长率、单价……）的合计行是加权平均，不是加总，不查；
+    // 占比、比例、比重这类构成列照查。
+    const isTotalRow = (cells) => cells.some((c) => TOTAL_LABEL.test(c || ""));
+    const isRateCol = (h) => /率|单价|均价|平均|增速|增幅|倍/.test(h || "") && !/占比|比例|比重|构成/.test(h || "");
+    // 比率行（「预期增长率」「单价」）夹在明细里，不进求和
+    const isRateRow = (cells) => cells.some((c) => c && !num(c) && /率|增速|增幅|单价|均价|平均/.test(c));
     rows.forEach((cells, ri) => {
-      if (ri === 0) return;
-      const labelIdx = cells.findIndex((c) => TOTAL_LABEL.test(c));
+      if (ri < first) return;
+      const labelIdx = cells.findIndex((c) => TOTAL_LABEL.test(c || ""));
       if (labelIdx < 0) return;
+      const label = cells[labelIdx].replace(/\s/g, "");
+      // 上一段：往上找到上一个合计类行（小计找任意合计类行，合计／总计只找合计／总计）
+      const stop = (r) => (label === "小计" ? isTotalRow(rows[r]) : rows[r].some((c) => /^(合|总)\s*计$/.test(c || "")));
+      let from = ri - 1;
+      while (from >= first && !stop(from)) from--;
+      let seg = [];
+      for (let r = from + 1; r < ri; r++) if (!isRateRow(rows[r])) seg.push(r);
+      if (label !== "小计") {
+        const subs = seg.filter((r) => rows[r].some((c) => /^小\s*计$/.test(c || "")));
+        if (subs.length) seg = subs;
+        else seg = seg.filter((r) => !isTotalRow(rows[r]));
+      }
+      if (!seg.length) {   // 合计写在表首：对下面那一段
+        for (let r = ri + 1; r < rows.length && !isTotalRow(rows[r]); r++) if (!isRateRow(rows[r])) seg.push(r);
+      }
       for (let ci = 0; ci < cells.length; ci++) {
-        if (ci === labelIdx) continue;
+        if (ci === labelIdx || isRateCol(head[ci])) continue;
         const total = num(cells[ci]);
         if (!total) continue;
-        // 该列其余数据行都必须是干净数字，才判得了
+        // 这一段的数据格都必须是干净数字，才判得了
         const vals = [];
         let clean = true;
-        for (let r = 1; r < rows.length; r++) {
-          if (r === ri) continue;
+        for (const r of seg) {
           const n = num(rows[r][ci]);
           if (!n) { clean = false; break; }
+          // 合计是绝对数，分项里的百分数是比率行（有的连标签都没写），不加
+          if (n.pct && !total.pct) continue;
           vals.push(n.v);
         }
-        if (!clean || !vals.length) continue;
-        const sum = vals.reduce((a, b) => a + b, 0);
+        if (!clean || vals.length < 2) continue;
+        const sum = vals.reduce((x, y) => x + y, 0);
         if (!close(sum, total.v)) {
-          add("合计不符", `第 ${ti + 1} 表「${cells[labelIdx]}」行第 ${ci + 1} 列：列内 ${vals.length} 项之和 ${round(sum)} ≠ 表内合计 ${total.raw}`);
+          report("合计不符", `第 ${ti + 1} 表「${cells[labelIdx]}」行第 ${ci + 1} 列：上面 ${vals.length} 项之和 ${round(sum)} ≠ 表内${cells[labelIdx]} ${total.raw}`, [{ text: total.raw, table: rows.idx }]);
         } else if (total.pct && Math.abs(sum - 100) > PCT_TOL) {
-          add("百分比构成", `第 ${ti + 1} 表「${cells[labelIdx]}」行第 ${ci + 1} 列：占比合计 ${round(sum)}%，应为 100%`);
+          // 合计与各项对得上、只是不到 100%：「前五名合计占比」这类表本来就是部分，只提示
+          hint("百分比构成", `第 ${ti + 1} 表「${cells[labelIdx]}」行第 ${ci + 1} 列：占比合计 ${round(sum)}%，不是 100%；是部分构成就不用改`, [{ text: total.raw, table: rows.idx }]);
         }
       }
     });
@@ -135,9 +174,10 @@ async function check(file) {
     // ── 2 合计列（表头标了合计的那一列，等于本行其余列之和）────
     head.forEach((h, ci) => {
       if (!TOTAL_LABEL.test(h)) return;
+      if (head.some((x, k) => k > 0 && k !== ci && isRateCol(x))) return;   // 混着比率列，行内加总无意义
       for (let r = 1; r < rows.length; r++) {
-        // 合计行已在第 1 段查过，别从列的方向再报一遍
-        if (TOTAL_LABEL.test(rows[r][0] || "")) continue;
+        // 合计行已在第 1 段查过，别从列的方向再报一遍；余额、单价、比率这类行按行加总没有意义
+        if (TOTAL_LABEL.test(rows[r][0] || "") || /余额|期初|期末|累计|单价|均价|率/.test(rows[r][0] || "")) continue;
         const total = num(rows[r][ci]);
         if (!total) continue;
         const vals = [];
@@ -151,7 +191,7 @@ async function check(file) {
         if (!clean || !vals.length) continue;
         const sum = vals.reduce((a, b) => a + b, 0);
         if (!close(sum, total.v)) {
-          add("合计不符", `第 ${ti + 1} 表第 ${r + 1} 行「${head[ci]}」列：其余列之和 ${round(sum)} ≠ ${total.raw}`);
+          report("合计不符", `第 ${ti + 1} 表第 ${r + 1} 行「${head[ci]}」列：其余列之和 ${round(sum)} ≠ ${total.raw}`, [{ text: total.raw, table: rows.idx }]);
         }
       }
     });
@@ -160,8 +200,11 @@ async function check(file) {
   // ── 3 同指标跨表同值 ────────────────────────────────────
   // **只在表头完全相同时才比**：历史表与预测表都有「营业收入」，但年份区间不同，
   // 数值本就不同——拿整行比会满屏误报。表头一致还出现同标签不同值，才是真的对不上。
+  // **只比首行声明了表头的表**（本工具生成的表）。手写的财务表里同名行常是
+  // 不同口径（管理费用表与销售费用表都有「办公费」），真实稿回放 105 条全是这类。
   const seen = new Map();
   tables.forEach((rows, ti) => {
+    if (!rows.declared) return;
     const head = rows[0];
     const schema = head.join("｜");
     rows.slice(1).forEach((cells) => {
@@ -175,7 +218,7 @@ async function check(file) {
       if (seen.has(key)) {
         const prev = seen.get(key);
         if (prev.sig !== sig) {
-          add("跨表同值", `「${label}」（表头 ${head.join("/")}）在第 ${prev.ti + 1} 表是 ${prev.sig}，第 ${ti + 1} 表是 ${sig}`);
+          add("跨表同值", `「${label}」（表头 ${head.join("/")}）在第 ${prev.ti + 1} 表是 ${prev.sig}，第 ${ti + 1} 表是 ${sig}`, [{ text: label, table: rows.idx }]);
         }
       } else {
         seen.set(key, { ti, sig });
@@ -186,8 +229,7 @@ async function check(file) {
   // ── 4～6 正文 ──────────────────────────────────────────
   const { paras, unitTables } = readBody(xml, styles, tables);
   checkEnumeration(paras, add);
-  const hints = [];
-  checkProseValues(paras, unitTables, (rule, detail) => hints.push({ rule, detail }));
+  checkProseValues(paras, unitTables, hint);
   hits.hints = hints;
   return hits;
 }
@@ -264,7 +306,7 @@ function checkEnumeration(paras, add) {
     if (marks[0] === 1 && marks.length >= 2) {
       let n = 1;
       while (marks.includes(n + 1)) n++;
-      if (n !== want) add("计数与列举", `「${m[0]}」其后行内列了 ${n} 条（一是…${n === 1 ? "" : "、" + "一二三四五六七八九十"[n - 1] + "是"}）`);
+      if (n !== want) add("计数与列举", `「${m[0]}」其后行内列了 ${n} 条（一是…${n === 1 ? "" : "、" + "一二三四五六七八九十"[n - 1] + "是"}）`, [m[0]]);
       return;
     }
     // b. 下一级标题：只在章节之内判（全文开头的计数句，名下有几条判不清）
@@ -276,7 +318,7 @@ function checkEnumeration(paras, add) {
       if (paras[k].level && paras[k].level <= section) break;
       if (paras[k].level === section + 1) n++;
     }
-    if (n !== want) add("计数与列举", `「${m[0]}」其后列了 ${n} 个下一级标题`);
+    if (n !== want) add("计数与列举", `「${m[0]}」其后列了 ${n} 个下一级标题`, [m[0]]);
   });
 }
 
@@ -314,26 +356,29 @@ function checkProseValues(paras, unitTables, hint) {
         const unit = m[3].replace("％", "%");
         const v = Number(m[2].replace(/,/g, ""));
         const key = `${label}｜${unit}｜${years}`;
-        if (!seen.has(key)) seen.set(key, { label, unit, years, vals: new Set() });
+        if (!seen.has(key)) seen.set(key, { label, unit, years, vals: new Set(), at: [] });
         seen.get(key).vals.add(v);
+        seen.get(key).at.push(m[0].trim());
         for (const t of unitTables) {
           if (t.unit !== unit) continue;
           for (const [tl, tv] of t.vals) {
             if (tl.length < 2 || !label.endsWith(tl) || !TABLE_PREFIX.test(label.slice(0, -tl.length))) continue;
-            if (!close(v, tv)) tableHits.set(`${tl}|${v}|${tv}`, `「${tl}」正文是 ${v}${unit}，表格里是 ${tv}${unit}`);
+            if (!close(v, tv)) tableHits.set(`${tl}|${v}|${tv}`, [`「${tl}」正文是 ${v}${unit}，表格里是 ${tv}${unit}`, m[0].trim()]);
           }
         }
       }
     }
   }
-  for (const { label, unit, years, vals } of seen.values()) {
-    if (vals.size > 1) hint("正文同指标异值", `「${label}」${years ? "（" + years + "）" : ""}在正文里出现了 ${[...vals].map((x) => x + unit).join("、")}`);
+  for (const { label, unit, years, vals, at } of seen.values()) {
+    if (vals.size > 1) hint("正文同指标异值", `「${label}」${years ? "（" + years + "）" : ""}在正文里出现了 ${[...vals].map((x) => x + unit).join("、")}`, at);
   }
-  for (const msg of tableHits.values()) hint("正文与表格异值", msg);
+  for (const [msg, at] of tableHits.values()) hint("正文与表格异值", msg, [at]);
 }
 
+module.exports = { check };
+
 // ── 入口 ─────────────────────────────────────────────────
-(async () => {
+if (require.main === module) (async () => {
   const file = process.argv[2];
   if (!file) {
     console.error("用法：node check-num.js <文件.docx> [--strict]");

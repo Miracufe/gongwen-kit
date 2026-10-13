@@ -1,6 +1,6 @@
 ---
 name: gongwen-kit
-description: 中文公文（党政机关、央国企场景）Word 生成与合规机检：按 GB/T 9704 生成标准 .docx——通知、报告、请示、函、纪要、管理办法等，含红头、发文字号、版记；出稿自动机检（体例、数字、文风）。Use when creating, formatting, or machine-checking Chinese official documents (gongwen) as Word files.
+description: 中文公文（党政机关、央国企场景）Word 生成、修复与合规机检：按 GB/T 9704 生成标准 .docx——通知、报告、请示、函、纪要、管理办法等，含红头、发文字号、版记；出稿自动机检（体例、数字、文风）；现成 .docx 按国标修复，改动写成修订痕迹。Use when creating, fixing, formatting, or machine-checking Chinese official documents (gongwen) as Word files.
 ---
 
 # gongwen-kit
@@ -24,6 +24,11 @@ description: 中文公文（党政机关、央国企场景）Word 生成与合�
    核对后属实就改，不属实（不同主语、不同口径）就留着，不必为消提示改写原文。
 4. **交付**：.docx 给用户；要 PDF 就在 Word 里导出，再按需跑
    `tools/check-pdf.py` 核字体与版面。
+
+用户给的是**现成的 .docx**（手写稿、旧模板、别人发来的）要改格式时，不重写，走修复：
+`node tools/fix-doc.js 稿子.docx`，输出「稿子-修订.docx」，原文件不动。版式直接改；
+体例写成修订痕迹由用户逐条接受或拒绝；数字问题只插批注，不替用户改数。
+把终端里的修复报告转述给用户，提醒在 Word「审阅」里过一遍修订和批注。细则见 `docs/修复.md`。
 
 ## 公文要素速查（GB/T 9704—2012）
 

@@ -15,4 +15,7 @@ echo
 echo "== 负对照 =="
 node tests/negative.js
 echo
+echo "== 修复工具 =="
+node tests/fix.js
+echo
 echo "全部通过"

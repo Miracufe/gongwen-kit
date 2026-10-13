@@ -61,8 +61,9 @@ async function readDocx(file) {
   // 整行列位左移，表内几条规则会查错格。
   const cellAlign = (tc) => ((tc.match(/<w:jc w:val="([^"]+)"/) || [])[1]) || "left";
   const dataTables = (xml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/g) || [])
-    .filter((tb) => /<w:tblHeader/.test(tb))
-    .map((tb) => {
+    .map((tb, idx) => ({ tb, idx }))
+    .filter(({ tb }) => /<w:tblHeader/.test(tb))
+    .map(({ tb, idx }) => {
       const trs = tb.match(/<w:tr[ >][\s\S]*?<\/w:tr>/g) || [];
       const rows = trs.map((tr) => rowCells(tr, textOf));
       const aligns = trs.map((tr) => rowCells(tr, cellAlign));
@@ -70,6 +71,7 @@ async function readDocx(file) {
       if (rows.length && rows[rows.length - 1].every((c) => !c)) {
         rows.pop(); aligns.pop();
       }
+      rows.idx = idx;   // 全文表格里的序号（修复工具挂批注用）
       return { rows, aligns };
     });
   const tables = dataTables.map((d) => d.rows);
@@ -89,7 +91,8 @@ function check(file, { paras, tables, tableAligns, xml }) {
   const raw = paras.map((p) => p.text).join("\n");
   const text = unquote(raw);
   const hits = [];
-  const add = (rule, detail) => hits.push({ rule, detail });
+  // anchors：命中处的原文片段，修复工具（tools/fix-doc.js）按它把批注挂到对应段落
+  const add = (rule, detail, anchors = []) => hits.push({ rule, detail, anchors });
 
   // 0 有没有正文。放在所有规则之前——内容全丢的稿子后面每条都查不到东西，
   //   于是逐条通过、打印「通过」。这种坏法出现过：序列化坏掉、内容没了、
@@ -103,60 +106,61 @@ function check(file, { paras, tables, tableAligns, xml }) {
   }
 
   // 1 自称
-  if (/我司/.test(text)) add("自称", "出现「我司」。一般用「我方」；非常正式、以机关名义署名的文件用「我单位」");
-  if (/贵司/.test(text)) add("称对方", "出现「贵司」，改成「贵单位」");
+  if (/我司/.test(text)) add("自称", "出现「我司」。一般用「我方」；非常正式、以机关名义署名的文件用「我单位」", ["我司"]);
+  if (/贵司/.test(text)) add("称对方", "出现「贵司」，改成「贵单位」", ["贵司"]);
 
   // 2 数字与单位之间缺空格（只认常见物理单位，避免误伤「3 个」「5 年」）
   //   ℃、%、°、′、″ 按 GB 3101 与数值之间不留空，不在此列。
   const unitRe = /\d(?:mAh\/g|GWh|kWh|MWh|kg|kW|MW|mm|cm|km|ppm|t\/h|g\/cm|Wh)/g;
   const noSpace = text.match(unitRe);
-  if (noSpace) add("数字与单位", `${[...new Set(noSpace)].slice(0, 4).join("、")} 等处缺半角空格`);
+  if (noSpace) add("数字与单位", `${[...new Set(noSpace)].slice(0, 4).join("、")} 等处缺半角空格`, noSpace);
 
   // 3 数值范围省略后位单位（GB/T 15835 5.1.3）
   const rangeBad = text.match(/\d+(?:\.\d+)?\s*[~～—–－-]\s*\d+(?:\.\d+)?\s*(?:%|万元|亿元|万|亿)/g) || [];
   rangeBad.forEach((m) => {
     const head2 = m.split(/[~～—–－-]/)[0];
     if (!/%|万|亿|元/.test(head2)) {
-      add("数值范围", `「${m}」前一个数缺单位，应写成 15%~30%、13 万元~17 万元`);
+      add("数值范围", `「${m}」前一个数缺单位，应写成 15%~30%、13 万元~17 万元`, [m]);
     }
   });
 
   // 4 纯小数缺整数位 0（GB/T 15835 5.1.2）
   const bareDec = text.match(/[^\d\w.]\.\d+/g);
-  if (bareDec) add("纯小数", `${bareDec.slice(0, 3).join("、")} 缺小数点前的 0`);
+  if (bareDec) add("纯小数", `${bareDec.slice(0, 3).join("、")} 缺小数点前的 0`, bareDec.map((x) => x.slice(1)));
 
   // 5 四位年份简写（GB/T 15835 5.1.4）。命中条件是「两位数字 + 年 + 时点词」——
   //   只有跟着时点词，那个「年」才一定是年份而不是年限（「运营 20 年」是时长）。
   const sy = [...new Set(text.match(/(?<![第满近共达约]\s?)(?<!\d)\d{2}\s*年(?=初|中|底|末|上半年|下半年)/g) || [])];
-  if (sy.length) add("年份简写", `${sy.slice(0, 3).join("、")}，四位年份不简写为两位`);
+  if (sy.length) add("年份简写", `${sy.slice(0, 3).join("、")}，四位年份不简写为两位`, sy);
 
   // 6 中文里的半角括号（GB/T 15834）
   const halfParen = text.match(/[一-龥][()]|[()][一-龥]/g);
-  if (halfParen) add("半角括号", `${halfParen.slice(0, 3).join("、")}，中文用全角（）`);
+  if (halfParen) add("半角括号", `${halfParen.slice(0, 3).join("、")}，中文用全角（）`, halfParen);
 
   // 7 斜体（GB/T 15835 5.1.7.1 数字用正体；衬线中文没有真正的意大利体，
   //   Word 会做倾斜变形，印出来是歪的）
-  if (/<w:i\/>|<w:i w:val="(?:1|true|on)"/.test(xml)) {
+  // 格式修订（w:rPrChange）里存的是改之前的格式，不算
+  if (/<w:i\/>|<w:i w:val="(?:1|true|on)"/.test(xml.replace(/<w:rPrChange\b[\s\S]*?<\/w:rPrChange>/g, ""))) {
     add("斜体", "文中有斜体 run。中文正文一律用正体，强调走路内粗体");
   }
 
   // 8 全角数字（GB/T 15835 5.1.7.1 阿拉伯数字用二分字身）
   const fullNum = text.match(/[０-９]+/g);
-  if (fullNum) add("全角数字", `${[...new Set(fullNum)].slice(0, 3).join("、")}，阿拉伯数字用半角`);
+  if (fullNum) add("全角数字", `${[...new Set(fullNum)].slice(0, 3).join("、")}，阿拉伯数字用半角`, fullNum);
 
   // 9 阿拉伯数字与汉字数位混用（GB/T 15835 5.3）。只收无歧义的一档：
   //   数字后接「十／百／千」再接「万／亿／零」，宽形会误伤「2018十大」「5千瓦」。
   const mixNum = text.match(/\d+\s*[十百千]\s*[万亿零]/g);
-  if (mixNum) add("数位混用", `${[...new Set(mixNum)].slice(0, 3).join("、")}，写成 300 万、100 零 8`);
+  if (mixNum) add("数位混用", `${[...new Set(mixNum)].slice(0, 3).join("、")}，写成 300 万、100 零 8`, mixNum);
 
   // 10 年月日简写不完整（GB/T 15835 5.1.4：年月日不完整时不能用「-」替代）。
   //    网址里的数字串不是日期，先剔掉 URL 再查。
   const badYmd = text.replace(/https?:\/\/\S+/g, "").match(/\d{4}-\d{1,2}(?!\d)(?!-)/g);
-  if (badYmd) add("日期简写", `${[...new Set(badYmd)].slice(0, 3).join("、")}，年月日不全时写成 2008 年 8 月`);
+  if (badYmd) add("日期简写", `${[...new Set(badYmd)].slice(0, 3).join("、")}，年月日不全时写成 2008 年 8 月`, badYmd);
 
   // 11 年月日用顿号分隔（GB/T 15834 A.4.2：用短横线连接号，不用顿号）
   const dunYmd = text.match(/\d{4}\s*、\s*\d{1,2}\s*、\s*\d{1,2}/g);
-  if (dunYmd) add("日期顿号", `${dunYmd.slice(0, 3).join("、")}，写成 2010-03-02`);
+  if (dunYmd) add("日期顿号", `${dunYmd.slice(0, 3).join("、")}，写成 2010-03-02`, dunYmd);
 
   // ── 表格内部（GB/T 1.1 10.4.2.2、GB/T 15834 A.1）────────
   tables.forEach((rows, ti) => {
@@ -165,15 +169,15 @@ function check(file, { paras, tables, tableAligns, xml }) {
         const at = `第 ${ti + 1} 表第 ${ri + 1} 行第 ${ci + 1} 格`;
         if (c === null) return;   // 合并位不是格
         // 12 相同内容不写「同上」
-        if (/^同[上左前]$/.test(c)) add("表格同上", `${at}「${c}」，写具体值或通栏`);
+        if (/^同[上左前]$/.test(c)) add("表格同上", `${at}「${c}」，写具体值或通栏`, [{ text: c, table: rows.idx }]);
         // 13 空单元格应写一字线（空串才是格空了；null 是合并位）
-        if (ri > 0 && c === "") add("表格空格", `${at}是空的，没有内容的格写「—」`);
+        if (ri > 0 && c === "") add("表格空格", `${at}是空的，没有内容的格写「—」`, [{ text: (cells[0] || ""), table: rows.idx }]);
         // 14 表内段后不加句号
-        if (c.endsWith("。")) add("表格句号", `${at}「${c.slice(0, 16)}…」以句号收尾，表内不加句号`);
+        if (c.endsWith("。")) add("表格句号", `${at}「${c.slice(0, 16)}…」以句号收尾，表内不加句号`, [{ text: c, table: rows.idx }]);
         // 15 表头只用中文：连续两个以上大写字母即判为夹了英文词（放行 r=8%、
         //    2025E 这类单字母/符号列头；型号 XC-21 先抠掉再判）
         if (ri === 0 && /[A-Z]{2,}/.test(c.replace(/\b[A-Z]{1,5}-?\d[\w-]*/g, ""))) {
-          add("表头夹英文", `${at}「${c}」，表头只用中文`);
+          add("表头夹英文", `${at}「${c}」，表头只用中文`, [{ text: c, table: rows.idx }]);
         }
       });
     });
@@ -189,7 +193,7 @@ function check(file, { paras, tables, tableAligns, xml }) {
       if (!body.length) continue;
       const prose = body.filter((c) => !looksNumeric(c));
       if (prose.length * 2 > body.length) {
-        add("数值列非数值", `第 ${ti + 1} 表第 ${ci + 1} 列右对齐（数值列），但 ${prose.length}/${body.length} 格是叙述文字，如「${prose[0].slice(0, 16)}」`);
+        add("数值列非数值", `第 ${ti + 1} 表第 ${ci + 1} 列右对齐（数值列），但 ${prose.length}/${body.length} 格是叙述文字，如「${prose[0].slice(0, 16)}」`, [{ text: prose[0], table: rows.idx }]);
       }
     }
   });
@@ -199,7 +203,7 @@ function check(file, { paras, tables, tableAligns, xml }) {
   const dup = paras.filter((p) => /^Heading[1-4]$/.test(p.style) && p.numbered
     && /^(?:[一二三四五六七八九十]+[、．.]|（[一二三四五六七八九十]+）|\d{1,2}[.．、](?!\d))/.test(p.text));
   if (dup.length) {
-    add("标题重复编号", `${dup.length} 个标题手写了编号，与自动编号叠成两个：「${dup[0].text.slice(0, 20)}」`);
+    add("标题重复编号", `${dup.length} 个标题手写了编号，与自动编号叠成两个：「${dup[0].text.slice(0, 20)}」`, dup.map((p) => p.text));
   }
 
   // （原「自然段顶格」一条没有移植：私有编辑体例里正文段的缩进直接写在段落上，
@@ -214,7 +218,7 @@ function check(file, { paras, tables, tableAligns, xml }) {
     const dotted = paras.filter((p) => !p.inTable
       && new RegExp(`^\\d+\\.\\d+(?!\\s*(?:${UNIT}))`).test(p.text));
     if (dotted.length) {
-      add("公文层次序数", `${dotted.length} 段用了 1.1 式编号：「${dotted[0].text.slice(0, 24)}…」。公文用 一、（一）1.（1） 四层（GB/T 9704 7.3.3）`);
+      add("公文层次序数", `${dotted.length} 段用了 1.1 式编号：「${dotted[0].text.slice(0, 24)}…」。公文用 一、（一）1.（1） 四层（GB/T 9704 7.3.3）`, dotted.map((p) => p.text));
     }
   }
 
@@ -223,7 +227,7 @@ function check(file, { paras, tables, tableAligns, xml }) {
   {
     const linZero = (text.match(/[一二三四五六七八九〇]*〇[一二三四五六七八九〇]*\s*年/g) || []);
     if (linZero.length) {
-      add("中文数字日期", `${[...new Set(linZero)].slice(0, 3).join("、")}，成文日期与正文日期一律阿拉伯数字（GB/T 9704 7.3.5.3）`);
+      add("中文数字日期", `${[...new Set(linZero)].slice(0, 3).join("、")}，成文日期与正文日期一律阿拉伯数字（GB/T 9704 7.3.5.3）`, linZero);
     }
   }
 
@@ -231,7 +235,7 @@ function check(file, { paras, tables, tableAligns, xml }) {
   {
     const padded = text.match(/年\s*0\d\s*月|月\s*0\d\s*日/g) || [];
     if (padded.length) {
-      add("月日编虚位", `${[...new Set(padded)].slice(0, 3).join("、")}，月、日不编虚位（1 不写 01）`);
+      add("月日编虚位", `${[...new Set(padded)].slice(0, 3).join("、")}，月、日不编虚位（1 不写 01）`, padded);
     }
   }
 
@@ -245,7 +249,7 @@ function check(file, { paras, tables, tableAligns, xml }) {
     if (withDi.length) fnBad.push(`顺序号不加「第」字：${[...new Set(withDi)].join("、")}`);
     const withZero = text.match(/〔\d{4}〕\s*0+\d+\s*号/g) || [];
     if (withZero.length) fnBad.push(`顺序号不编虚位：${[...new Set(withZero)].join("、")}`);
-    if (fnBad.length) add("发文字号", fnBad.join("；"));
+    if (fnBad.length) add("发文字号", fnBad.join("；"), [...wrongBracket, ...withDi, ...withZero]);
   }
 
   // 23 版式。版心与行字数是国标硬指标，被人在 Word 里改过就不再是公文版式。
@@ -273,8 +277,10 @@ function check(file, { paras, tables, tableAligns, xml }) {
   return hits;
 }
 
+module.exports = { readDocx, check };
+
 // ── 入口 ─────────────────────────────────────────────────
-(async () => {
+if (require.main === module) (async () => {
   const file = process.argv[2];
   if (!file) {
     console.error("用法：node check-doc.js <文件.docx> [--strict]");

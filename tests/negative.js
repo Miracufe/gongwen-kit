@@ -95,6 +95,27 @@ function expectPass(checker, file, note, { hint } = {}) {
   const t = G.table({ head: ["项目", "金额"], widths: [3000, 3000], rows: [["甲", "10"], ["乙", "20"], ["合计", "99"]] });
   expectFail("check-num.js", await build("合计错.docx", [...t]), "合计不符");
 
+  // 分段合计：小计只加上一段，合计对各小计之和
+  const seg = (sub2) => G.table({ head: ["项目", "金额"], widths: [3000, 3000], rows: [
+    ["甲", "10"], ["乙", "20"], ["小计", "30"], ["丙", "5"], ["丁", "5"], ["小计", sub2], ["合计", "40"]] });
+  expectPass("check-num.js", await build("多段小计正确.docx", [...seg("10")]), "多段小计正确");
+  expectFail("check-num.js", await build("多段小计错.docx", [...seg("11")]), "多段小计错");
+  // 比率列的合计行是加权平均，不是加总
+  expectPass("check-num.js", await build("比率列.docx", [...G.table({ head: ["产品", "收入", "毛利率"], widths: [2000, 2000, 2000],
+    rows: [["甲", "10", "20%"], ["乙", "20", "30%"], ["合计", "30", "26.7%"]] })]), "比率列不加总");
+  // 手写表：首行没声明表头，合计照查；同名行跨表不比（口径可能不同）
+  const plain = (rows) => new docx.Table({ rows: rows.map((r) => new docx.TableRow({
+    children: r.map((c) => new docx.TableCell({ children: [P(c)] })) })) });
+  expectPass("check-num.js", await build("手写表合计错.docx", [plain([["项目", "金额"], ["甲", "10"], ["乙", "20"], ["合计", "99"]])]),
+    "手写表合计错（只提示）", { hint: "合计不符" });
+  expectPass("check-num.js", await build("增长率行.docx", [...G.table({ head: ["板块", "2027年"], widths: [3000, 3000], rows: [
+    ["甲", "240"], ["乙", "120"], ["预期增长率", "40%"], ["小计", "360"]] })]), "比率行不进求和");
+  expectPass("check-num.js", await build("无标签比率行.docx", [...G.table({ head: ["板块", "2027年"], widths: [3000, 3000], rows: [
+    ["甲", "240"], ["乙", "120"], ["", "90%"], ["小计", "360"]] })]), "没写标签的百分数行不进求和");
+  expectPass("check-num.js", await build("手写表同名行.docx", [
+    plain([["项目", "2025年度"], ["办公费", "100"], ["差旅费", "50"]]), P("销售费用明细："),
+    plain([["项目", "2025年度"], ["办公费", "30"], ["差旅费", "20"]])]), "手写表同名行跨表不比");
+
   // 计数与列举：下一级标题条数对不上
   expectFail("check-num.js", await build("计数标题.docx", [
     G.h1("工作安排"), P("重点做好以下三项工作。"), G.h2("统筹部署"), G.h2("压实责任"),

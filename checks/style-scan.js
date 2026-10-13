@@ -43,6 +43,7 @@ const NOMINALIZE = /(?:进行|予以|加以)(?:了|一个|一场|一次|一番)?
 /** 扫一段已抠引文的正文，返回 { norm, style } 两组提示行。 */
 function scan(body) {
   const norm = [];
+  const anchors = [];   // 规范层命中的原文片段（修复工具挂批注用）
   const style = [];
 
   // ── 规范层 ─────────────────────────────────────────────
@@ -50,7 +51,7 @@ function scan(body) {
   for (const row of loadTsv("yixingci.tsv", 4)) {
     for (const bad of row[1].split("｜")) {
       const w = bad.trim();
-      if (w && body.includes(w)) yx.push(`${w} → ${row[0]}`);
+      if (w && body.includes(w)) { yx.push(`${w} → ${row[0]}`); anchors.push(w); }
     }
   }
   if (yx.length) norm.push(`异形词 ${yx.length} 处（GF 1001-2001）：${yx.join("、")}`);
@@ -64,6 +65,7 @@ function scan(body) {
   while ((hm = halfRe.exec(body))) {
     if (hm[0][0] === "." && hm.index > 0 && /\d/.test(body[hm.index - 1])) continue;
     half.push(hm[0]);
+    anchors.push(hm[0]);
   }
   if (half.length) {
     const seen = [...new Set(half.map((h) => h.trim()))];
@@ -100,7 +102,7 @@ function scan(body) {
   const nm = body.match(NOMINALIZE) || [];
   if (nm.length) style.push(`虚动词结构 ${nm.length} 处（${nm.slice(0, 4).join("、")}）：动作直接用动词。`);
 
-  return { norm, style };
+  return { norm, style, anchors };
 }
 
-module.exports = { scan };
+module.exports = { scan, loadTsv };
