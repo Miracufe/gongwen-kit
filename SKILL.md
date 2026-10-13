@@ -20,7 +20,7 @@ description: 中文公文（党政机关、央国企场景）Word 生成与合�
    所有构件的用法一页看全：`templates/complete.js`。
 3. **出稿**：`node 稿子.js`。写盘后自动跑三道机检（体例、数字、文风）——
    输出全绿才算过，非零退出就去改，别改检查。
-4. **交付**：.docx 给用户；要 PDF 就在 Office/WPS 里导出，再按需跑
+4. **交付**：.docx 给用户；要 PDF 就在 Word 里导出，再按需跑
    `tools/check-pdf.py` 核字体与版面。
 
 ## 公文要素速查（GB/T 9704—2012）
