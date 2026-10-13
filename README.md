@@ -158,7 +158,8 @@ GB/T 9704—2012、GB/T 15834、GB/T 15835、GB/T 1.1、GB/T 8170、GF 1001，
 参照执行。条款对照见 [docs/依据.md](docs/依据.md)。
 
 标题与发文机关标志默认用方正小标宋简体，需要自行安装；没装时的替代方案见
-[docs/字体.md](docs/字体.md)。版式在微软 Word 上渲染验收。
+[docs/字体.md](docs/字体.md)。版式在 Mac 版微软 Word 上渲染验收；Windows 版 Word 与 WPS 没有逐项验过渲染。
+测试在 Windows、macOS、Linux 与 Node 18／20／22 上都跑过（CI）。
 
 ## 文档
 
