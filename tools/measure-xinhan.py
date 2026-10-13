@@ -18,6 +18,17 @@ import fitz
 
 TOL = 0.5  # mm
 
+# 标志字体若是回退字体（没装方正小标宋时 Word 静默换成 SimSun），字形高度不同，
+# 量出来的位置差约 3mm，不能拿来校准。没装就设 GONGWEN_FONT_TITLE="Songti SC Black"
+# 重出量测件（docs/版式.md 坑 14）。
+TITLE_FONTS = ("方正小标宋简体", "FZXiaoBiaoSong", "FZXBS", "STSongti-SC-Black")
+
+
+def fallback_fonts(spans):
+    return sorted({sp["font"] for sp in spans
+                   if any("\u4e00" <= ch <= "\u9fff" for ch in sp["text"])
+                   and not any(t in sp["font"] for t in TITLE_FONTS)})
+
 
 def mm(v):
     return v * 25.4 / 72
@@ -58,6 +69,9 @@ def main(path):
     black = sorted((sp for sp in spans if sp["color"] != 0xFF0000), key=lambda s: s["bbox"][1])
     if not mark:
         print("✗ 没找到红色发文机关标志"); return 1
+    bad = fallback_fonts(mark)
+    if bad:
+        print(f"✗ 标志字体是 {'、'.join(bad)}（回退字体），量出来的数不作数；见 docs/版式.md 坑 14"); return 1
     m0, m1 = min(s["bbox"][1] for s in mark), max(s["bbox"][3] for s in mark)
     pairs = group(red_rects(page))
     if len(pairs) < 2 or any(len(p) != 2 for p in pairs[:2]):
