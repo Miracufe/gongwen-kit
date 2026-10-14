@@ -1,7 +1,21 @@
 ---
 name: gongwen-kit
 description: 中文公文（党政机关、央国企场景）Word 生成、修复与合规机检：按 GB/T 9704 生成标准 .docx——通知、报告、请示、函、纪要、管理办法等，含红头、发文字号、版记；出稿自动机检（体例、数字、文风）；现成 .docx 按国标修复，改动写成修订痕迹。Use when creating, fixing, formatting, or machine-checking Chinese official documents (gongwen) as Word files.
+version: 0.3.1
+date: 2026-10-14
+author: imhuhe / Antigravity Agent
+license: MIT
+metadata:
+  hermes:
+    category: office-automation
+    tags: [gongwen, docx, gb-t-9704, word, chinese-official-documents, compliance-check]
+    related_skills: [smart-visualization, win-clash-hermes-toolkit]
 ---
+
+> 🔴 **模型执行铁律 (HARD-GATE ENFORCEMENT & PRE-FLIGHT GUARDRAIL)**：
+> 1. **严禁跳过流程**：执行本 Skill 任务时，必须完整读取本 SKILL.md 文件，不得跳过任何 Checklist 或预检逻辑。
+> 2. **物理控制台运行断言**：凡涉及代码、公文生成或修复，必须通过 `run_command` 在终端实际运行 `python D:\Work\scripts\verify_all_skills.py`，只有控制台返回 `Exit Code 0` 方可宣称测试通过。
+> 3. **强制输出断言表格**：在回答结束前，必须显式输出【Checklist 物理执行断言表】，不得仅凭口头断言宣称完成。
 
 # gongwen-kit
 
