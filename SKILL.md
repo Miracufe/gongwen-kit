@@ -9,7 +9,7 @@ metadata:
   hermes:
     category: office-automation
     tags: [gongwen, docx, gb-t-9704, word, chinese-official-documents, compliance-check]
-    related_skills: [smart-visualization, win-clash-hermes-toolkit]
+    related_skills: [smart-visualization, win-singbox-agent-toolkit]
 ---
 
 > 🔴 **模型执行铁律 (HARD-GATE ENFORCEMENT & PRE-FLIGHT GUARDRAIL)**：
