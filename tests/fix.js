@@ -15,11 +15,15 @@ const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const JSZip = require("jszip");
+const docx = require("docx");
 const { editsFor } = require("../lib/fix/text-rules");
 const { acceptAll, rejectAll } = require("../lib/fix/revisions");
 const { textOf } = require("../lib/table-read");
 const { build } = require("./messy-docx");
+const G = require("../lib/gongwen-core").form("wen");
 const checkDoc = require("../checks/check-doc");
+const { normalizeDocx } = require("../lib/docx-normalize");
+const pkg = require("../package.json");
 const { scan } = require("../checks/style-scan");
 
 const ROOT = path.join(__dirname, "..");
@@ -30,9 +34,17 @@ const apply = (t, es) => { let o = "", i = 0; for (const e of es) { o += t.slice
 // 段落文字（实体解码后比：原稿写 &quot;、改后写 " 是同一个字）
 const { decode } = require("../lib/fix/runs");
 const paraTexts = (xml) => (xml.match(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g) || []).map((p) => decode(textOf(p)));
+// 段落签名：文字 + pPr + 每个 run 的 rPr。合规件 fix 前后必须逐段相同；
+// 只数修订/批注会漏掉「表题/附件页/版记被直接改字体」这类静默误改。
+const paraSig = (xml) => (xml.match(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g) || []).map((p) => {
+  const ppr = ((p.match(/<w:pPr>[\s\S]*?<\/w:pPr>/) || [""])[0]).replace(/\s+/g, " ");
+  const runs = [...p.matchAll(/<w:r\b[\s\S]*?<\/w:r>/g)].map((r) => ((r[0].match(/<w:rPr>[\s\S]*?<\/w:rPr>/) || [""])[0]).replace(/\s+/g, " "));
+  return JSON.stringify([decode(textOf(p)), ppr, runs]);
+});
 const ME = "gongwen-kit";
 const docXml = async (file) => (await JSZip.loadAsync(fs.readFileSync(file))).file("word/document.xml").async("string");
 const fix = (file, out) => execFileSync("node", [path.join(ROOT, "tools/fix-doc.js"), file, "--out", out], { encoding: "utf8" });
+const fixForce = (file, out) => execFileSync("node", [path.join(ROOT, "tools/fix-doc.js"), file, "--out", out, "--layout"], { encoding: "utf8" });
 
 (async () => {
   console.log("== 规则标本 ==");
@@ -51,6 +63,8 @@ const fix = (file, out) => execFileSync("node", [path.join(ROOT, "tools/fix-doc.
     ["纯小数", "厚度.5毫米", "厚度0.5毫米"],
     // 该放过的
     ["网址不改", "见 https://a.b/c,d 页", "见 https://a.b/c,d 页"],
+    ["文件名不改", "详见公文.docx", "详见公文.docx"],
+    ["域名不改", "访问中文.com", "访问中文.com"],
     ["引号里的原话不改", "「筹画」一词", "「筹画」一词"],
     ["时刻不改", "10:30开会", "10:30开会"],
     ["序号点不改", "附件：1.工作方案", "附件：1.工作方案"],
@@ -138,8 +152,8 @@ const fix = (file, out) => execFileSync("node", [path.join(ROOT, "tools/fix-doc.
   ok(/<w:rPrDefault><w:rPr><w:rFonts w:ascii="FangSong"/.test(styles), "默认字体仿宋");
   ok(/w:styleId="1">[\s\S]*?SimHei[\s\S]*?<\/w:style>/.test(styles), "中文样式 ID 的一级标题改成黑体");
   ok(/w:firstLineChars="200"/.test(styles), "正文首行缩进二字");
-  ok(!(out.match(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g) || []).some((p) => /w:line="360"/.test(p) && !/FF0000|RedHead/.test(p)),
-    "手设的 1.5 倍行距交还网格（红头不动）");
+  ok(!/w:line="360"/.test(paraOf(out, "为做好项目申报")), "正文手设的 1.5 倍行距交还网格");
+  ok(/w:line="360"/.test(paraOf(out, "××市发展和改革委员会")), "落款署名的手设行距不被正文规则改掉");
   ok(z.file("word/footerGwOdd.xml") && /PAGE/.test(await z.file("word/footerGwOdd.xml").async("string")), "加了公文页码");
   ok(/原文件未改动/.test(report), "报告写明原文件未改动");
   {
@@ -149,16 +163,354 @@ const fix = (file, out) => execFileSync("node", [path.join(ROOT, "tools/fix-doc.
   }
   ok(fs.readFileSync(messy).equals(fs.readFileSync(messy)) && (await docXml(messy)) === orig, "原文件没被改");
 
+  console.log("\n== 角色保护 ==");
+  {
+    const mk = async (name, children) => {
+      const d = new docx.Document({ externalStyles: G.externalStyles(), numbering: G.numbering, sections: [{ ...G.sectionProps(), children }] });
+      const f = path.join(TMP, name);
+      fs.writeFileSync(f, await docx.Packer.toBuffer(d));
+      await normalizeDocx(f, pkg.version, { mark: false });
+      return f;
+    };
+    const red = path.join(TMP, "red.docx");
+    await mk("red.docx", [
+      new docx.Paragraph({ children: [new docx.TextRun({ text: "××市筹画局", color: "FF0000" })] }),
+      G.p("正文。"),
+    ]);
+    fix(red, path.join(TMP, "red-out.docx"));
+    const redText = paraTexts(acceptAll(await docXml(path.join(TMP, "red-out.docx")), ME)).join("\n");
+    ok(redText.includes("××市筹画局"), "红头机关名不按异形词改");
+
+    const tblFile = path.join(TMP, "tbl.docx");
+    await mk("tbl.docx", [
+      G.p("表。"),
+      ...G.table({ head: ["项目", "数值"], widths: [3000, 3000], rows: [["甲", "１００"], ["乙", "100kWh"]] }),
+    ]);
+    fix(tblFile, path.join(TMP, "tbl-out.docx"));
+    const tblXml = await docXml(path.join(TMP, "tbl-out.docx"));
+    ok(!/<w:(?:ins|del)\b/.test(tblXml), "表格里的数字不自动改（只插批注）");
+    ok(/１００/.test(tblXml) && /100kWh/.test(tblXml), "表格原值保留");
+
+    // 表格开标签带属性（Word 的 w:rsidR）时，整张表不能被当成正文
+    const attrFile = path.join(TMP, "tbl-attr.docx");
+    {
+      const z = await JSZip.loadAsync(fs.readFileSync(tblFile));
+      const x = await z.file("word/document.xml").async("string");
+      z.file("word/document.xml", x.replace("<w:tbl>", '<w:tbl w:rsidR="00A1B2C3">'));
+      fs.writeFileSync(attrFile, await z.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+    }
+    fix(attrFile, path.join(TMP, "tbl-attr-out.docx"));
+    const attrXml = await docXml(path.join(TMP, "tbl-attr-out.docx"));
+    ok(!/<w:(?:ins|del)\b/.test(attrXml) && /１００/.test(attrXml) && /100kWh/.test(attrXml),
+      "表格带属性时仍按表格保护");
+    ok(!/项目金额/.test(attrXml), "表格头不会被当成标题");
+
+    // 表题没有 keepNext（手写/旧模板常见），靠“紧邻表格”识别
+    const capFile = path.join(TMP, "caption.docx");
+    await mk("caption.docx", [
+      new docx.Paragraph({ alignment: docx.AlignmentType.CENTER, children: [
+        new docx.TextRun({ text: "表 1 说明", font: { eastAsia: "SimHei", ascii: "SimHei" }, size: 28 }),
+      ] }),
+      ...G.table({ head: ["项目", "金额"], widths: [3000, 3000], rows: [["甲", "10"], ["合计", "10"]] }),
+    ]);
+    fix(capFile, path.join(TMP, "caption-out.docx"));
+    const capOut = await docXml(path.join(TMP, "caption-out.docx"));
+    // 表题允许补「首行不缩进」以抵消 Normal 的两字缩进，但字体字号必须保留。
+    ok(/表 1 说明/.test(capOut) && /w:rFonts[^>]*SimHei/.test(capOut) && /<w:sz w:val="28"\/>/.test(capOut),
+      "无 keepNext 的表题字体字号保留");
+
+    // 上行文多个签发人：续行只有姓名、右对齐，不能被当成正文
+    const signersFile = path.join(TMP, "signers.docx");
+    await mk("signers.docx", [
+      ...G.letterhead({ agency: "××局", docNo: { dept: "×发", year: 2026, seq: 1 }, signers: ["张××", "李××", "王××"] }),
+      ...G.title(["关于测试事项的请示"]),
+      G.p("正文。"),
+      ...G.luokuan({ unit: "××局", date: "2026 年 10 月 23 日" }),
+    ]);
+    const signersBefore = await docXml(signersFile);
+    fix(signersFile, path.join(TMP, "signers-out.docx"));
+    ok(JSON.stringify(paraSig(signersBefore)) === JSON.stringify(paraSig(await docXml(path.join(TMP, "signers-out.docx")))),
+      "多签发人续行不被当成正文");
+
+    // 正文引用发文字号不是版头字号，不能整段跳过修订
+    const citeFile = path.join(TMP, "cite.docx");
+    await mk("cite.docx", [new docx.Paragraph({ children: [
+      new docx.TextRun({ text: "根据国办发〔2026〕5号要求，统一筹画规范。", font: { eastAsia: "KaiTi", ascii: "KaiTi" }, size: 24 }),
+    ] })]);
+    const citeReport = fix(citeFile, path.join(TMP, "cite-out.docx"));
+    const citeXml = await docXml(path.join(TMP, "cite-out.docx"));
+    const citeText = paraTexts(acceptAll(citeXml, ME)).join("\n");
+    ok(citeText.includes("筹划") && /异形词 1 处/.test(citeReport) && !/w:sz w:val="24"/.test(citeXml),
+      "正文引用发文字号后仍改异形词、手设字号交还样式");
+
+    // 只有第X条编号（不分章）不能判成条文体
+    const onlyBase = path.join(TMP, "onlytiao-base.docx");
+    execFileSync("node", [path.join(ROOT, "templates", "gongwen-guanli.js"), onlyBase], { encoding: "utf8", stdio: "pipe" });
+    {
+      const z = await JSZip.loadAsync(fs.readFileSync(onlyBase));
+      let numbering = await z.file("word/numbering.xml").async("string");
+      numbering = numbering.replace(/第%1章/g, "第%1条").replace(/第%2条/g, "（%2）");
+      z.file("word/numbering.xml", numbering);
+      fs.writeFileSync(onlyBase, await z.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+    }
+    const onlyReport = fixForce(onlyBase, path.join(TMP, "onlytiao-out.docx"));
+    const onlyZ = await JSZip.loadAsync(fs.readFileSync(path.join(TMP, "onlytiao-out.docx")));
+    const onlyStyles = await onlyZ.file("word/styles.xml").async("string");
+    const onlyH1 = (onlyStyles.match(/<w:style\b[^>]*w:styleId="Heading1"[\s\S]*?<\/w:style>/) || [""])[0];
+    ok(!/<w:jc w:val="center"\/>/.test(onlyH1) && /SimHei/.test(onlyH1) && /一级黑体/.test(onlyReport),
+      "只有第X条时不判条文体，Heading1 不居中");
+
+    // 字号 + 制表位 + 签发人同一段：签发人楷体不能被版式规则剥掉
+    const sameFile = path.join(TMP, "signsame.docx");
+    await mk("signsame.docx", [new docx.Paragraph({ children: [
+      new docx.TextRun({ text: "×政发〔2026〕12号", font: { eastAsia: "FangSong", ascii: "FangSong" }, size: 32 }),
+      new docx.TextRun({ text: "\t" }),
+      new docx.TextRun({ text: "签发人：", font: { eastAsia: "FangSong", ascii: "FangSong" }, size: 32 }),
+      new docx.TextRun({ text: "张××", font: { eastAsia: "KaiTi", ascii: "KaiTi" }, size: 32 }),
+    ] })]);
+    const sameReport = fix(sameFile, path.join(TMP, "signsame-out.docx"));
+    const sameXml = await docXml(path.join(TMP, "signsame-out.docx"));
+    ok(/w:rFonts[^>]*KaiTi/.test(sameXml) && /<w:sz w:val="32"\/>/.test(sameXml) && !/正文直接格式/.test(sameReport),
+      "字号+签发人同行的楷体与字号保留");
+
+    // 段首全角空格手工缩进：要补「首行不缩进」，否则叠加 Normal 的二字缩进
+    const leadFile = path.join(TMP, "lead-space.docx");
+    await mk("lead-space.docx", [new docx.Paragraph({
+      alignment: docx.AlignmentType.BOTH,
+      children: [new docx.TextRun({ text: "　　手工缩进段：段首两个全角空格。" })],
+    })]);
+    fix(leadFile, path.join(TMP, "lead-space-out.docx"));
+    const leadP = ((await docXml(path.join(TMP, "lead-space-out.docx")))
+      .match(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?手工缩进段[\s\S]*?<\/w:p>/) || [""])[0];
+    ok(/<w:ind w:firstLine="0" w:firstLineChars="0"\/>/.test(leadP), "段首全角空格的手工缩进段补首行不缩进");
+
+    // ×、· 在仿宋里是全角，不能按 Latin-1 半角估宽（署名会偏左半个字）
+    const sigRight = async (unit) => {
+      const f = path.join(TMP, `width-${unit}.docx`);
+      await mk(`width-${unit}.docx`, [...G.luokuan({ unit, date: "2026 年 10 月 23 日" })]);
+      const p = ((await docXml(f)).match(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?<\/w:p>/g) || []).find((q) => textOf(q).trim() === unit) || "";
+      return Number((p.match(/<w:ind[^>]*w:right="(\d+)"/) || [])[1]);
+    };
+    ok(await sigRight("××集团") === await sigRight("示范集团"), "× 按全角估宽");
+
+    // 斜体计数按 run，不按段
+    const italFile = path.join(TMP, "ital2.docx");
+    await mk("ital2.docx", [new docx.Paragraph({ children: [
+      new docx.TextRun({ text: "斜体一", italics: true }),
+      new docx.TextRun({ text: "与" }),
+      new docx.TextRun({ text: "斜体二", italics: true }),
+    ] })]);
+    const italReport = fix(italFile, path.join(TMP, "ital2-out.docx"));
+    ok(/斜体改正体 2 处/.test(italReport), "斜体改正体计数按 run");
+
+    const dry = path.join(TMP, "dry.docx");
+    execFileSync("node", [path.join(ROOT, "tools/fix-doc.js"), tblFile, "--dry-run", "--out", dry], { encoding: "utf8", stdio: "pipe" });
+    ok(!fs.existsSync(dry), "--dry-run 不写文件");
+
+    let noOut = false;
+    try { execFileSync("node", [path.join(ROOT, "tools/fix-doc.js"), tblFile, "--out"], { encoding: "utf8", stdio: "pipe" }); } catch (e) { noOut = e.status === 2; }
+    ok(noOut, "--out 缺值返回 2");
+  }
+
+  console.log("\n== 自家出稿被改乱 ==");
+  {
+    const marked = path.join(TMP, "marked-edited.docx");
+    execFileSync("node", [path.join(ROOT, "templates", "notice.js"), marked], { encoding: "utf8", stdio: "pipe" });
+    const z = await JSZip.loadAsync(fs.readFileSync(marked));
+    let x = await z.file("word/document.xml").async("string");
+    x = x.replace(/<w:pgMar[^>]*>/, '<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/>');
+    x = x.replace(/(<w:p(?:\s[^>]*)?>(?:(?!<w:p[\s>])[\s\S])*?为规范公文格式[\s\S]*?<\/w:p>)/, (p) =>
+      p.replace('<w:r><w:t', '<w:r><w:rPr><w:rFonts w:ascii="SimSun" w:eastAsia="SimSun" w:hAnsi="SimSun"/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t'));
+    z.file("word/document.xml", x);
+    fs.writeFileSync(marked, await z.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+    const r = fix(marked, path.join(TMP, "marked-edited-out.docx"));
+    const out = await docXml(path.join(TMP, "marked-edited-out.docx"));
+    ok(/w:top="2098" w:right="1474" w:bottom="1984" w:left="1587"/.test(out), "标记稿改乱版心后重新校准");
+    ok(!/SimSun/.test(out) && !/w:sz w:val="24"/.test(out), "标记稿正文直接字体交还样式");
+    ok(/版心与网格/.test(r) && /正文直接格式/.test(r), "标记稿报告列出真实改动");
+    const nRev = (out.match(/<w:(?:ins|del|rPrChange)\b/g) || []).length;
+    const nCom = (out.match(/<w:commentReference\b/g) || []).length;
+    ok(nRev === 0 && nCom === 0, "标记稿修复仍是 0 修订/0 批注");
+  }
+
+  console.log("\n== 样式层/页脚被改乱 ==");
+  {
+    const gen = async (name) => {
+      const f = path.join(TMP, name);
+      execFileSync("node", [path.join(ROOT, "templates", "notice.js"), f], { encoding: "utf8", stdio: "pipe" });
+      return f;
+    };
+    const normalFile = await gen("marked-normal.docx");
+    {
+      const z = await JSZip.loadAsync(fs.readFileSync(normalFile));
+      let st = await z.file("word/styles.xml").async("string");
+      st = st.replace(/(<w:style\b[^>]*w:styleId="Normal"[\s\S]*?<w:rPr>)/,
+        '$1<w:rFonts w:ascii="SimSun" w:eastAsia="SimSun" w:hAnsi="SimSun"/><w:sz w:val="24"/><w:szCs w:val="24"/>');
+      z.file("word/styles.xml", st);
+      fs.writeFileSync(normalFile, await z.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+    }
+    const normalReport = fix(normalFile, path.join(TMP, "marked-normal-out.docx"));
+    const normalStyles = await (await JSZip.loadAsync(fs.readFileSync(path.join(TMP, "marked-normal-out.docx")))).file("word/styles.xml").async("string");
+    const normalNormal = (normalStyles.match(/<w:style\b[^>]*w:styleId="Normal"[\s\S]*?<\/w:style>/) || [""])[0];
+    ok(!/SimSun/.test(normalNormal) && !/<w:sz w:val="24"\/>/.test(normalNormal) && /正文样式/.test(normalReport)
+      && !/层次标题样式/.test(normalReport), "标记稿改 Normal 样式（宋体小四）后恢复仿宋三号，只报真实项");
+
+    const styleFile = await gen("marked-style.docx");
+    {
+      const z = await JSZip.loadAsync(fs.readFileSync(styleFile));
+      let st = await z.file("word/styles.xml").async("string");
+      st = st.replace(/(<w:style\b[^>]*w:styleId="Heading1"[\s\S]*?<w:rPr>)/,
+        '$1<w:b/><w:color w:val="2E74B5"/>');
+      z.file("word/styles.xml", st);
+      fs.writeFileSync(styleFile, await z.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+    }
+    const styleReport = fix(styleFile, path.join(TMP, "marked-style-out.docx"));
+    const styleStyles = await (await JSZip.loadAsync(fs.readFileSync(path.join(TMP, "marked-style-out.docx")))).file("word/styles.xml").async("string");
+    const styleH1 = (styleStyles.match(/<w:style\b[^>]*w:styleId="Heading1"[\s\S]*?<\/w:style>/) || [""])[0];
+    ok(!/<w:b\/>/.test(styleH1) && !/2E74B5/.test(styleH1) && /层次标题样式/.test(styleReport)
+      && !/正文样式/.test(styleReport), "标记稿改 Heading1 加粗蓝色后恢复黑体，只报真实项");
+
+    // 条文体：Heading1 是「第X章」，报告措辞不能套行文体的「一级黑体」
+    const zhangFile = path.join(TMP, "marked-zhang-style.docx");
+    execFileSync("node", [path.join(ROOT, "templates", "gongwen-guanli.js"), zhangFile], { encoding: "utf8", stdio: "pipe" });
+    {
+      const z = await JSZip.loadAsync(fs.readFileSync(zhangFile));
+      let st = await z.file("word/styles.xml").async("string");
+      st = st.replace(/(<w:style\b[^>]*w:styleId="Heading1"[\s\S]*?<w:rPr>)/,
+        '$1<w:b/><w:color w:val="2E74B5"/>');
+      z.file("word/styles.xml", st);
+      fs.writeFileSync(zhangFile, await z.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+    }
+    const zhangReport = fix(zhangFile, path.join(TMP, "marked-zhang-style-out.docx"));
+    const zhangStyles = await (await JSZip.loadAsync(fs.readFileSync(path.join(TMP, "marked-zhang-style-out.docx")))).file("word/styles.xml").async("string");
+    const zhangH1 = (zhangStyles.match(/<w:style\b[^>]*w:styleId="Heading1"[\s\S]*?<\/w:style>/) || [""])[0];
+    const zhangFont = process.env.GONGWEN_FONT_TITLE || "方正小标宋简体";
+    ok(/<w:jc w:val="center"\/>/.test(zhangH1) && zhangH1.includes(zhangFont) && /章标题/.test(zhangReport)
+      && !/一级黑体|二级楷体/.test(zhangReport), "条文体改 Heading1 后报章标题与实际字体，不套一级黑体");
+    ok(!/正文样式|版心与网格|页码/.test(zhangReport), "条文体只报真实项（样式层其余项不出现）");
+
+    const footerFile = await gen("marked-footer.docx");
+    {
+      const z = await JSZip.loadAsync(fs.readFileSync(footerFile));
+      let x = await z.file("word/document.xml").async("string");
+      x = x.replace(/<w:footerReference\b[^>]*\/>/g, "");
+      z.file("word/document.xml", x);
+      fs.writeFileSync(footerFile, await z.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+    }
+    const footerReport = fix(footerFile, path.join(TMP, "marked-footer-out.docx"));
+    const footerXml = await docXml(path.join(TMP, "marked-footer-out.docx"));
+    ok(/<w:footerReference\b/.test(footerXml) && /页码/.test(footerReport)
+      && !/正文样式|层次标题样式/.test(footerReport), "标记稿删页脚后补回页码，只报真实项");
+
+    const evenOddFile = await gen("marked-evenodd.docx");
+    {
+      const z = await JSZip.loadAsync(fs.readFileSync(evenOddFile));
+      let st = await z.file("word/settings.xml").async("string");
+      st = st.replace(/<w:evenAndOddHeaders\b[^>]*\/>/g, "");
+      z.file("word/settings.xml", st);
+      fs.writeFileSync(evenOddFile, await z.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+    }
+    const evenOddReport = fix(evenOddFile, path.join(TMP, "marked-evenodd-out.docx"));
+    const evenOddSettings = await (await JSZip.loadAsync(fs.readFileSync(path.join(TMP, "marked-evenodd-out.docx")))).file("word/settings.xml").async("string");
+    ok(/<w:evenAndOddHeaders\b/.test(evenOddSettings) && /重新校准/.test(evenOddReport),
+      "标记稿删 evenAndOddHeaders 后补回（双页页码居左）");
+
+    const cscFile = await gen("marked-csc.docx");
+    {
+      const z = await JSZip.loadAsync(fs.readFileSync(cscFile));
+      let st = await z.file("word/settings.xml").async("string");
+      st = st.replace(/<w:characterSpacingControl\b[^>]*\/>/g, "");
+      z.file("word/settings.xml", st);
+      fs.writeFileSync(cscFile, await z.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+    }
+    const cscReport = fix(cscFile, path.join(TMP, "marked-csc-out.docx"));
+    const cscSettings = await (await JSZip.loadAsync(fs.readFileSync(path.join(TMP, "marked-csc-out.docx")))).file("word/settings.xml").async("string");
+    ok(/<w:characterSpacingControl\b/.test(cscSettings) && /标点压缩/.test(cscReport),
+      "标记稿删 characterSpacingControl 后补回");
+  }
+
+  console.log("\n== 版式报告措辞（直接构造语义签名，单测 describeLayoutDiff / layoutChangeNotes） ==");
+  {
+    const { describeLayoutDiff, layoutChangeNotes } = require("../lib/fix/semantic");
+    const parts = (h1, body = []) => ({
+      styles: { default: {}, styles: { Heading1: h1 } },
+      body,
+      sections: [],
+      settings: { evenAndOddHeaders: true, characterSpacingControl: "compressPunctuation" },
+    });
+    const h1 = (font, jc, extra = {}) => ({ rPr: { font: [font, font, font], sz: 32, b: false, color: "", ...extra }, pPr: { jc } });
+
+    const zhangNotes = describeLayoutDiff(
+      parts(h1("方正小标宋简体", "center", { b: true, color: "2E74B5" })),
+      parts(h1("方正小标宋简体", "center")), { form: "zhang" });
+    ok(zhangNotes.length === 1 && zhangNotes[0] === "层次标题样式（Heading1）：章标题方正小标宋简体、居中",
+      "条文体的 Heading1 写章标题与实际字体，不写一级黑体");
+    const wenNotes = describeLayoutDiff(parts(h1("SimHei", "", { b: true })), parts(h1("SimHei", "")), { form: "wen" });
+    ok(wenNotes.length === 1 && wenNotes[0] === "层次标题样式（Heading1）：一级黑体", "行文体的措辞保持不变");
+
+    // 正文只补首行不缩进：报告不能把字体、行距也写进去
+    const para = (ind) => ({ pPr: { ind, spacing: {} }, runs: [] });
+    const flushOnly = describeLayoutDiff(parts(null, [para({})]), parts(null, [para({ firstLine: "0", firstLineChars: "0" })]));
+    ok(flushOnly.length === 1 && flushOnly[0] === "正文直接格式：原不缩进的段落补「首行不缩进」",
+      "正文只补首行不缩进时只报缩进，不写成字体/行距");
+    const runOnly = describeLayoutDiff(
+      parts(null, [{ pPr: { ind: {}, spacing: {} }, runs: [{ font: ["SimSun", "SimSun", "SimSun"], sz: 24 }] }]),
+      parts(null, [para({})]));
+    ok(runOnly.length === 1 && runOnly[0] === "正文直接格式：直接字体、字号交还样式",
+      "正文只有直接字体字号时，不把行距与缩进也写进去");
+
+    // 语义签名算不出来（origParts 为空）：保留 fixStyles/fixDocument 的逐项说明
+    const fallback = [
+      "正文样式：仿宋三号、首行缩进二字、两端对齐、行距交给网格",
+      "层次标题样式 4 个：章小标宋居中、条与项仿宋，三号，不加粗",
+    ];
+    const kept = layoutChangeNotes({ own: true, before: null, after: null, form: "zhang", fallback });
+    ok(kept.length === 3 && /重新校准/.test(kept[0]) && fallback.every((n) => kept.includes(n)),
+      "版式语义比对算不出来时，保留修复过程的逐项说明");
+    const replaced = layoutChangeNotes({ before: parts(h1("SimHei", "", { b: true })), after: parts(h1("SimHei", "")), fallback: ["不该出现"] });
+    ok(!replaced.includes("不该出现") && replaced.some((n) => /一级黑体/.test(n)), "比对算得出来时不混入回退说明");
+  }
+
   console.log("\n== 合规件不误改 ==");
-  for (const t of ["notice", "gongwen-qingshi", "complete", "xinhan", "jiyao", "qiye"]) {
-    const src = path.join(TMP, `${t}.docx`);
+  for (const t of ["notice", "gongwen-qingshi", "complete", "xinhan", "jiyao", "qiye", "gongwen-guanli"]) {
+    const label = t === "gongwen-guanli" ? "公文管理办法" : t;
+    const src = path.join(TMP, `${label}.docx`);
     execFileSync("node", [path.join(ROOT, "templates", `${t}.js`), src], { encoding: "utf8", stdio: "pipe" });
-    const dst = path.join(TMP, `${t}-修订.docx`);
+    const dst = path.join(TMP, `${label}-修订.docx`);
+    const before = await docXml(src);
+    const stylesOf = async (f) => (await JSZip.loadAsync(fs.readFileSync(f))).file("word/styles.xml").async("string");
+    const stylesA = await stylesOf(src);
     const r = fix(src, dst);
     const x = await docXml(dst);
+    const stylesB = await stylesOf(dst);
     const nRev = (x.match(/<w:(?:ins|del|rPrChange)\b/g) || []).length;
     const nCom = (x.match(/<w:commentReference\b/g) || []).length;
-    ok(nRev === 0 && nCom === 0, `${t}：修订 ${nRev} 处、批注 ${nCom} 条${nRev + nCom ? "\n" + r : ""}`);
+    const sigA = paraSig(before), sigB = paraSig(x);
+    const diff = sigA.findIndex((v, i) => v !== sigB[i]);
+    ok(nRev === 0 && nCom === 0 && sigA.length === sigB.length && diff < 0,
+      `${label}：修订 ${nRev} 处、批注 ${nCom} 条、段落格式 ${diff < 0 ? "不变" : "第 " + (diff + 1) + " 段变了"}${nRev + nCom || diff >= 0 ? "\n" + r : ""}`);
+    const ids = [...stylesB.matchAll(/<w:style\b[^>]*w:styleId="([^"]+)"/g)].map((m) => m[1]);
+    ok(new Set(ids).size === ids.length, `${label} styles.xml 无重复 styleId`);
+    ok(stylesA === stylesB, `${label} 自家出稿 styles.xml 未被 fix 改`);
+    ok(!/版式（直接改）/.test(r), `${label} 自家出稿不报版式直接改`);
+    if (t === "notice") {
+      const title = (stylesB.match(/<w:style\b[^>]*w:styleId="Title"[\s\S]*?<\/w:style>/) || [""])[0];
+      ok(/w:hAnsi=/.test(title), "标题 Title 带 w:hAnsi，引号不再回退仿宋");
+    }
+    if (t === "gongwen-guanli") {
+      const z = await JSZip.loadAsync(fs.readFileSync(dst));
+      const styles = await z.file("word/styles.xml").async("string");
+      const h1 = (styles.match(/<w:style\b[^>]*w:styleId="Heading1"[\s\S]*?<\/w:style>/) || [""])[0];
+      const titleFont = process.env.GONGWEN_FONT_TITLE || "方正小标宋简体";
+      ok(/<w:jc w:val="center"\/>/.test(h1) && h1.includes(titleFont) && !/版式（直接改）/.test(r),
+        "公文管理办法：章标题样式居中、字体为标题字体，自家出稿不套版式");
+      const forced = path.join(TMP, "公文管理办法-强制.docx");
+      fixForce(src, forced);
+      const forcedStyles = await (await JSZip.loadAsync(fs.readFileSync(forced))).file("word/styles.xml").async("string");
+      const forcedH1 = (forcedStyles.match(/<w:style\b[^>]*w:styleId="Heading1"[\s\S]*?<\/w:style>/) || [""])[0];
+      ok(/<w:jc w:val="center"\/>/.test(forcedH1) && forcedH1.includes(titleFont),
+        "公文管理办法强制重排仍按章文体（段落 numPr 优先于样式）");
+    }
   }
 
   fs.rmSync(TMP, { recursive: true, force: true });
